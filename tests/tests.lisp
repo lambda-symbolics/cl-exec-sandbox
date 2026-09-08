@@ -30,6 +30,40 @@
     (write-string text stream))
   path)
 
+(defun test-executable-file-detection ()
+  "Test executable regular files, symlinks and rejected filesystem objects."
+  (let* ((root (tests--temporary-root))
+         (executable (merge-pathnames "executable" root))
+         (plain (merge-pathnames "plain" root))
+         (link (merge-pathnames "executable-link" root))
+         (dangling (merge-pathnames "dangling-link" root))
+         (missing (merge-pathnames "missing" root))
+         (fifo (merge-pathnames "fifo" root)))
+    (unwind-protect
+         (progn
+           (tests--write executable "fixture")
+           (tests--write plain "fixture")
+           (sb-posix:chmod (uiop:native-namestring executable) #o700)
+           (sb-posix:chmod (uiop:native-namestring plain) #o600)
+           (sb-posix:symlink (uiop:native-namestring executable)
+                             (uiop:native-namestring link))
+           (sb-posix:symlink (uiop:native-namestring missing)
+                             (uiop:native-namestring dangling))
+           (sb-posix:mkfifo (uiop:native-namestring fifo) #o700)
+           (dolist (case (list (cons executable t)
+                              (cons link t)
+                              (cons plain nil)
+                              (cons root nil)
+                              (cons fifo nil)
+                              (cons missing nil)
+                              (cons dangling nil)))
+             (test-assert
+              (eq (cl-exec-sandbox::path--executable-file-p (first case))
+                  (rest case))
+              (format nil "executable file detection for ~A" (first case)))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist ':ignore)))
+  nil)
+
 (defun test-policy-validation ()
   "Test policy presets, malformed rules, and capability discovery."
   (let ((policy
@@ -719,6 +753,7 @@ host. They do not verify that macOS enforces the profile."
 (defun run-tests ()
   "Run all cl-exec-sandbox tests and return true."
   (setf *test-count* 0)
+  (test-executable-file-detection)
   (test-policy-validation)
   (test-bwrap-override)
   (test-seatbelt-override)
