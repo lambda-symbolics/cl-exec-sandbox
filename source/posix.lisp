@@ -39,8 +39,14 @@
                    :termination-scope :process-group)))
 
 (defun posix--terminate-process-group (process)
-  "Urgently terminate the process group led by PROCESS."
+  "Urgently terminate the process group led by PROCESS.
+
+Windows has no process groups, so there only the launched process itself is
+terminated."
+  #-win32
   (let ((process-id (uiop:process-info-pid process)))
     (when process-id
       (sb-posix:kill (- process-id) sb-posix:sigkill)))
+  #+win32
+  (uiop:terminate-process process :urgent t)
   nil)
