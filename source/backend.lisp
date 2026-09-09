@@ -17,7 +17,7 @@
     (list :platform (cond
                       (linux-p :linux)
                       (macos-p :macos)
-                      ((member :windows *features*) :windows)
+                      ((member :win32 *features*) :windows)
                       (t :unknown))
           :backend backend
           :available-p (not (null backend))
@@ -70,8 +70,10 @@
              (if (uiop:absolute-pathname-p pathname)
                  pathname
                  (or (loop for directory in (path--directories)
-                           for candidate = (merge-pathnames pathname directory)
-                           when (path--executable-file-p candidate)
+                           for candidate = (find-if #'path--executable-file-p
+                                                    (path--executable-candidates
+                                                     pathname directory))
+                           when candidate
                              return (truename candidate))
                      (error 'sandbox-execution-error
                             :message (format nil "Could not find executable ~A." program)
