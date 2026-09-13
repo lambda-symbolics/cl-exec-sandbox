@@ -16,6 +16,7 @@
                              (:file "posix")
                              (:file "linux")
                              (:file "macos")
+                             (:file "windows")
                              (:file "backend")
                              (:file "execute"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:cl-exec-sandbox/tests))))
@@ -30,3 +31,11 @@
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call '#:cl-exec-sandbox/tests '#:run-tests)))
+
+(asdf:defsystem #:cl-exec-sandbox/windows-tests
+  :description "Native Windows AppContainer enforcement tests."
+  :depends-on (#:cl-exec-sandbox #:sb-bsd-sockets)
+  :components ((:file "tests/windows-tests"))
+  :perform (asdf:test-op (operation component)
+             (declare (ignore operation component))
+             (uiop:symbol-call '#:cl-exec-sandbox/tests '#:run-windows-tests)))

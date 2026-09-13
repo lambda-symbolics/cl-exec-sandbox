@@ -8,11 +8,13 @@
          (macos-p  (not (null (member :darwin *features*))))
          (bwrap    (and linux-p (linux--find-bwrap)))
          (seatbelt (and macos-p (macos--find-sandbox-exec)))
+         (appcontainer (and (member :win32 *features*) (windows--find-helper)))
          (rg       (and (or linux-p macos-p) (rules--find-rg)))
          (helper   (and linux-p (linux--find-helper)))
          (backend  (cond
                      (bwrap    :bubblewrap)
                      (seatbelt :seatbelt)
+                     (appcontainer :appcontainer)
                      (t        nil))))
     (list :platform (cond
                       (linux-p :linux)
@@ -22,12 +24,14 @@
           :backend backend
           :available-p (not (null backend))
           :filesystem-read-write-deny (not (null backend))
+          :filesystem-read-only-host (and (not (null backend)) (not appcontainer))
+          :explicit-filesystem-scopes (not (null backend))
           :filesystem-deny-globs (and (not (null backend)) (not (null rg)))
           :nested-overrides (not (null backend))
           :process-namespaces (not (null bwrap))
-          :network-enabled t
+          :network-enabled (not (null (or bwrap seatbelt)))
           :network-isolated (or (and (not (null bwrap)) (not (null helper)))
-                                (not (null seatbelt)))
+                                (not (null seatbelt)) (not (null appcontainer)))
           :network-proxy-only (and (not (null bwrap)) (not (null helper)))
           :seccomp (not (null helper)))))
 
@@ -92,6 +96,9 @@
       ((member :darwin *features*)
        (macos--seatbelt-plan program-path arguments policy cwd
                              environment clear-environment-p))
+      ((member :win32 *features*)
+       (windows--appcontainer-plan program-path arguments policy cwd
+                                  environment clear-environment-p))
       (t
        (error 'sandbox-unavailable
               :message "No sandbox backend is available for this operating system."

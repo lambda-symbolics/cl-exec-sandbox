@@ -26,6 +26,7 @@
    #:sandbox-policy-protected-metadata-names
    #:read-only-sandbox-policy
    #:workspace-write-sandbox-policy
+   #:appcontainer-sandbox-policy
    #:unrestricted-sandbox-policy
    #:external-sandbox-policy
    #:sandbox-capabilities
@@ -37,6 +38,7 @@
    #:sandbox-plan-working-directory
    #:sandbox-plan-cleanup-paths
    #:sandbox-build-plan
+   #:sandbox-plan-cleanup
    #:sandbox-result
    #:sandbox-result-exit-code
    #:sandbox-result-output

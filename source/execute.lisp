@@ -212,5 +212,7 @@
     (unwind-protect
          (execute--run-plan plan input timeout merge-output-p
                             output-limit error-output-limit)
-      (dolist (path (reverse (sandbox-plan-cleanup-paths plan)))
-        (execute--safe-delete path)))))
+      (unwind-protect
+           (sandbox-plan-cleanup plan)
+        (dolist (path (reverse (sandbox-plan-cleanup-paths plan)))
+          (execute--safe-delete path))))))

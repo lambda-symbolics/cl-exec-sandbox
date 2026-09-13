@@ -40,3 +40,10 @@
      :type (member :process :process-group)
      :documentation "The native process scope terminated on timeout or cancellation."))
   (:documentation "A fully validated native launch plan and its cleanup obligations."))
+
+(defgeneric sandbox-plan-cleanup (plan)
+  (:documentation "Release backend-owned resources after PLAN's process tree has stopped."))
+
+(defmethod sandbox-plan-cleanup ((plan sandbox-plan))
+  (declare (ignore plan))
+  nil)

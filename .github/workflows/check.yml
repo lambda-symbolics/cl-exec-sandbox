@@ -1,0 +1,39 @@
+name: Check
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y sbcl bubblewrap ripgrep
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: ./check
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile native helpers
+        shell: pwsh
+        run: |
+          scripts/build-windows-helper.ps1
+          clang -std=c11 -O2 -Wall -Wextra -Werror tests/windows-child.c -o build/windows-child.exe -ladvapi32 -lws2_32
+          if ($LASTEXITCODE -ne 0) { throw 'Test payload compilation failed.' }
+      - name: Install pinned SBCL
+        shell: pwsh
+        run: |
+          $msi = Join-Path $env:RUNNER_TEMP 'sbcl.msi'
+          curl.exe --fail --location --retry 3 --output $msi https://downloads.sourceforge.net/project/sbcl/sbcl/2.6.6/sbcl-2.6.6-x86-64-windows-binary.msi
+          if ($LASTEXITCODE -ne 0) { throw 'SBCL download failed.' }
+          if ((Get-FileHash $msi).Hash.ToLowerInvariant() -ne 'edc85cdfb7c7123060c53a88eecd203ec3f6701b8520a44d4ee1113f19741f7e') { throw 'SBCL checksum mismatch.' }
+          $destination = Join-Path $env:RUNNER_TEMP 'sbcl-extract'
+          $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$destination`"")
+          if ($process.ExitCode -ne 0) { throw 'SBCL extraction failed.' }
+          $runtime = Join-Path $destination 'PFiles\Steel Bank Common Lisp'
+          "SANDBOX_TEST_SBCL=$runtime" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Enforce policies under a standard Windows account
+        shell: pwsh
+        run: scripts/check-windows.ps1 -RuntimeDirectory $env:SANDBOX_TEST_SBCL
