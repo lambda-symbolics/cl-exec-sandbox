@@ -57,9 +57,9 @@ static wchar_t *join(const wchar_t *root, const wchar_t *leaf) {
     if (n + wcslen(leaf) + 1 >= 240)
         fail(L"filesystem path too long", ERROR_FILENAME_EXCED_RANGE);
     wchar_t *result = allocate((n + wcslen(leaf) + 2) * sizeof(wchar_t));
-    wcscpy(result, root);
-    if (n && root[n - 1] != L'\\') wcscat(result, L"\\");
-    wcscat(result, leaf);
+    memcpy(result, root, n * sizeof(wchar_t));
+    if (n && root[n - 1] != L'\\') result[n++] = L'\\';
+    memcpy(result + n, leaf, (wcslen(leaf) + 1) * sizeof(wchar_t));
     return result;
 }
 static void validate_profile(const wchar_t *profile) {
@@ -86,7 +86,7 @@ static wchar_t *local_path(const wchar_t *input) {
         (input[2] != L'\\' && input[2] != L'/'))
         fail(L"expected a non-root local path shorter than 240 characters", ERROR_INVALID_NAME);
     wchar_t *path = allocate((n + 1) * sizeof(wchar_t));
-    wcscpy(path, input);
+    memcpy(path, input, (n + 1) * sizeof(wchar_t));
     for (size_t i = 2; i < n; ++i) {
         if (path[i] == L'/') path[i] = L'\\';
         if (path[i] == L':' || path[i] == L'*' || path[i] == L'?' || path[i] == L'"')
