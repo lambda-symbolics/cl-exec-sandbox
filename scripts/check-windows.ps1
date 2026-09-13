@@ -26,6 +26,10 @@ $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Test account is elevated.' }
 $env:TEMP = Join-Path $PSScriptRoot 'temp'
 $env:TMP = $env:TEMP
+$env:USERPROFILE = $PSScriptRoot
+$env:HOME = $PSScriptRoot
+$env:LOCALAPPDATA = Join-Path $PSScriptRoot 'AppData\Local'
+$env:APPDATA = Join-Path $PSScriptRoot 'AppData\Roaming'
 New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 $env:SBCL_HOME = Join-Path $PSScriptRoot 'runtime'
 Set-Location (Join-Path $PSScriptRoot 'source')

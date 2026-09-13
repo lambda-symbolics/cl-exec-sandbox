@@ -5,6 +5,7 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
       - run: sudo apt-get update && sudo apt-get install -y sbcl bubblewrap ripgrep

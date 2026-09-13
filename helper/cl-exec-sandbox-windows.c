@@ -214,7 +214,7 @@ static void walk(const wchar_t *path, PSID sid, const wchar_t *kind,
     if (depth > 128) fail(L"filesystem tree too deep", ERROR_BUFFER_OVERFLOW);
     DWORD access = FILE_READ_ATTRIBUTES | READ_CONTROL;
     if (mode) access |= WRITE_DAC;
-    HANDLE handle = open_path(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    HANDLE handle = open_path(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE);
     if (handle == INVALID_HANDLE_VALUE) {
         DWORD error = GetLastError();
         if (mode == 2 && (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)) return;
@@ -231,15 +231,14 @@ static void walk(const wchar_t *path, PSID sid, const wchar_t *kind,
     if (mode != 2 && (reparse || (!directory && attributes.nNumberOfLinks != 1)))
         fail(L"refuse reparse point or hard link in filesystem policy", ERROR_NOT_SUPPORTED);
     if (mode) set_acl(handle, sid, kind, mode == 2, directory, root);
-    CloseHandle(handle);
-    if (!directory || reparse) return;
+    if (!directory || reparse) { CloseHandle(handle); return; }
     wchar_t *pattern = join(path, L"*");
     WIN32_FIND_DATAW data;
     HANDLE search = FindFirstFileW(pattern, &data);
     free(pattern);
     if (search == INVALID_HANDLE_VALUE) {
         DWORD error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND) return;
+        if (error == ERROR_FILE_NOT_FOUND) { CloseHandle(handle); return; }
         fail(L"enumerate filesystem policy", error);
     }
     do {
@@ -250,6 +249,7 @@ static void walk(const wchar_t *path, PSID sid, const wchar_t *kind,
     } while (FindNextFileW(search, &data));
     DWORD error = GetLastError();
     FindClose(search);
+    CloseHandle(handle);
     if (error != ERROR_NO_MORE_FILES) fail(L"enumerate filesystem policy", error);
 }
 
@@ -377,7 +377,6 @@ int wmain(int argc, wchar_t **argv) {
         if (wcscmp(argv[i], L"read") && wcscmp(argv[i], L"write") && wcscmp(argv[i], L"deny"))
             fail(L"unknown filesystem access", ERROR_INVALID_PARAMETER);
         paths[(i - start) / 2] = local_path(argv[i + 1]);
-        if (!cleanup) pin_path(paths[(i - start) / 2]);
     }
     PSID sid = NULL;
     check_hr(DeriveAppContainerSidFromAppContainerName(argv[2], &sid), L"derive package SID");
@@ -387,12 +386,16 @@ int wmain(int argc, wchar_t **argv) {
     HANDLE self = open_path(executable, FILE_READ_ATTRIBUTES, FILE_SHARE_READ);
     if (self == INVALID_HANDLE_VALUE) fail(L"pin helper executable", GetLastError());
     helper_identity = info(self);
-    HANDLE mutex = lock_acls();
+    HANDLE mutex;
     if (cleanup) {
         wchar_t *name = join(L"Local", argv[2]);
         HANDLE job = OpenJobObjectW(JOB_OBJECT_TERMINATE | JOB_OBJECT_QUERY, FALSE, name);
         free(name);
         if (job) { terminate_job(job); CloseHandle(job); }
+        mutex = lock_acls();
+        for (int i = start; i < end; i += 2)
+            if (GetFileAttributesW(paths[(i - start) / 2]) != INVALID_FILE_ATTRIBUTES)
+                pin_path(paths[(i - start) / 2]);
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 2, TRUE, 0);
         HRESULT hr = DeleteAppContainerProfile(argv[2]);
@@ -400,6 +403,8 @@ int wmain(int argc, wchar_t **argv) {
             check_hr(hr, L"delete AppContainer profile");
         unlock_acls(mutex);
     } else {
+        mutex = lock_acls();
+        for (int i = start; i < end; i += 2) pin_path(paths[(i - start) / 2]);
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 0, TRUE, 0);
         PSID created = NULL;
@@ -408,8 +413,11 @@ int wmain(int argc, wchar_t **argv) {
         FreeSid(created);
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 1, TRUE, 0);
-        unlock_acls(mutex);
         DWORD result = launch(sid, argv[2], argv[4], argc - end - 1, argv + end + 1);
+        for (int i = start; i < end; i += 2)
+            walk(paths[(i - start) / 2], sid, argv[i], 2, TRUE, 0);
+        check_hr(DeleteAppContainerProfile(argv[2]), L"delete AppContainer profile");
+        unlock_acls(mutex);
         FreeSid(sid);
         return (int)result;
     }
