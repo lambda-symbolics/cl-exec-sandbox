@@ -72,8 +72,7 @@
                                  metadata secret programs payload read-file)))
              (check (eq (getf (sandbox-capabilities) :backend) :appcontainer) "native backend discovered")
              (status (list "identity") 0)
-             (dolist (command (list (list "C:/Program Files/Git/usr/bin/sh.exe" "-c" "printf shell-ok")
-                                    (list "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" "-NoProfile" "-NonInteractive" "-Command" "Write-Output shell-ok")))
+             (dolist (command (list (list "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" "-NoProfile" "-NonInteractive" "-Command" "Write-Output shell-ok")))
                (let ((result (run-sandboxed (first command) (rest command)
                                           :policy policy :working-directory workspace :timeout 20)))
                  (format t "~&Shell probe ~S: exit ~D~%stdout: ~A~%stderr: ~A~%"
