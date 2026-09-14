@@ -23,6 +23,7 @@
 static HANDLE pins[MAX_PINS];
 static unsigned pin_count;
 static BY_HANDLE_FILE_INFORMATION helper_identity;
+static PSID deny_identity;
 
 /* Serialize this library's ACL read/modify/write operations across invocations. */
 static HANDLE lock_acls(void) {
@@ -157,7 +158,7 @@ static void set_acl(HANDLE handle, PSID sid, const wchar_t *kind, BOOL cleanup,
     for (DWORD i = 0; i < original->AceCount; ++i) {
         void *ace;
         require(GetAce(original, i, &ace), L"read ACE");
-        if (own_ace(ace, sid)) { found = TRUE; continue; }
+        if (own_ace(ace, sid) || own_ace(ace, deny_identity)) { found = TRUE; continue; }
         require(AddAce(changed, ACL_REVISION_DS, MAXDWORD, ace, ((ACE_HEADER *)ace)->AceSize),
                 L"preserve ACE");
     }
@@ -173,6 +174,7 @@ static void set_acl(HANDLE handle, PSID sid, const wchar_t *kind, BOOL cleanup,
         unsigned count = 1;
         if (!wcscmp(kind, L"deny")) {
             entries[0].grfAccessMode = DENY_ACCESS;
+            entries[0].Trustee.ptstrName = deny_identity;
             entries[0].grfAccessPermissions = FILE_ALL_ACCESS;
         } else {
             entries[0].grfAccessMode = GRANT_ACCESS;
@@ -189,6 +191,7 @@ static void set_acl(HANDLE handle, PSID sid, const wchar_t *kind, BOOL cleanup,
             } else {
                 count = 2;
                 entries[1].grfAccessMode = DENY_ACCESS;
+                entries[1].Trustee.ptstrName = deny_identity;
                 entries[1].grfAccessPermissions = WRITE_RIGHTS;
             }
         }
@@ -300,11 +303,10 @@ static void terminate_job(HANDLE job) {
         Sleep(10);
     }
 }
-/* Package SIDs alone do not participate in Windows deny-ACE checks. Include
- * the invocation SID in a restricting list as well as in the lowbox identity.
- * Copy the caller's normal identities to that list so the additional check
- * only narrows access, while AppContainer still supplies the allow boundary. */
-static HANDLE restricted_token(PSID sid) {
+/* Package SIDs cannot be used as ordinary restricting SIDs. Use a separate
+ * invocation-specific NT SID for deny checks and retain AppContainer as the
+ * allow boundary. The copied caller identities do not enlarge normal access. */
+static HANDLE restricted_token(void) {
     HANDLE caller, restricted;
     require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE |
                              TOKEN_ASSIGN_PRIMARY, &caller), L"open caller token");
@@ -317,11 +319,14 @@ static HANDLE restricted_token(PSID sid) {
     TOKEN_USER *user = allocate(user_bytes);
     require(GetTokenInformation(caller, TokenUser, user, user_bytes, &user_bytes), L"read caller SID");
     SID_AND_ATTRIBUTES *sids = allocate((groups->GroupCount + 2) * sizeof(*sids));
-    for (DWORD i = 0; i < groups->GroupCount; ++i) sids[i].Sid = groups->Groups[i].Sid;
-    sids[groups->GroupCount].Sid = user->User.Sid;
-    sids[groups->GroupCount + 1].Sid = sid;
+    DWORD count = 0;
+    for (DWORD i = 0; i < groups->GroupCount; ++i)
+        if (!(groups->Groups[i].Attributes & SE_GROUP_INTEGRITY))
+            sids[count++].Sid = groups->Groups[i].Sid;
+    sids[count++].Sid = user->User.Sid;
+    sids[count++].Sid = deny_identity;
     require(CreateRestrictedToken(caller, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL,
-                                  groups->GroupCount + 2, sids, &restricted), L"restrict deny identity");
+                                  count, sids, &restricted), L"restrict deny identity");
     CloseHandle(caller);
     free(sids); free(user); free(groups);
     return restricted;
@@ -363,7 +368,7 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     require(UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                       handles, sizeof(handles), NULL, NULL), L"restrict inherited handles");
     wchar_t *line = command_line(count, arguments);
-    HANDLE token = restricted_token(sid);
+    HANDLE token = restricted_token();
     require(CreateProcessAsUserW(token, arguments[0], line, NULL, NULL, TRUE,
                                 EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
                                 NULL, cwd, &startup.StartupInfo, &process), L"create AppContainer process");
@@ -408,6 +413,11 @@ int wmain(int argc, wchar_t **argv) {
     }
     PSID sid = NULL;
     check_hr(DeriveAppContainerSidFromAppContainerName(argv[2], &sid), L"derive package SID");
+    SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+    require(AllocateAndInitializeSid(&authority, 5, SECURITY_NT_NON_UNIQUE,
+             *GetSidSubAuthority(sid, 1), *GetSidSubAuthority(sid, 2),
+             *GetSidSubAuthority(sid, 3), *GetSidSubAuthority(sid, 4),
+             0, 0, 0, &deny_identity), L"derive invocation deny SID");
     wchar_t executable[MAX_PATH];
     DWORD length = GetModuleFileNameW(NULL, executable, MAX_PATH);
     require(length && length < MAX_PATH, L"locate helper executable");
