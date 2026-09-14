@@ -317,6 +317,11 @@ static void ensure_loopback_up(void)
     close(descriptor);
     fail("could not read loopback flags");
   }
+  /* Bubblewrap normally enables lo before dropping CAP_NET_ADMIN. */
+  if (request.ifr_flags & IFF_UP) {
+    close(descriptor);
+    return;
+  }
   request.ifr_flags |= IFF_UP;
   if (ioctl(descriptor, SIOCSIFFLAGS, &request) != 0) {
     close(descriptor);
