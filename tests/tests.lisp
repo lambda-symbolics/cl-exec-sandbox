@@ -743,10 +743,14 @@ host. They do not verify that macOS enforces the profile."
                   (list (format nil "HTTP_PROXY=http://127.0.0.1:~D" port))
                   :timeout 3)))
            (test-assert (zerop (sandbox-result-exit-code result))
-                        "proxy-only command completes through the managed bridge")
+                         (format nil "proxy-only command completes through the managed bridge: ~D; ~A"
+                                 (sandbox-result-exit-code result)
+                                 (sandbox-result-error-output result)))
            (test-assert (string= (sandbox-result-output result) "pong")
                         "managed proxy bridge carries bidirectional bytes"))
       (sb-bsd-sockets:socket-close server)
+      (when (sb-thread:thread-alive-p thread)
+        (sb-thread:terminate-thread thread))
       (sb-thread:join-thread thread :default nil)))
   nil)
 

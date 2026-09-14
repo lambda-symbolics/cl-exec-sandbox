@@ -46,6 +46,49 @@ On macOS:
 Deny globs need =rg= on either host. Seatbelt installations outside =/usr/bin=
 can set =CL_EXEC_SANDBOX_SEATBELT= to an absolute executable path.
 
+* Windows backend
+
+The experimental Windows backend uses a fresh AppContainer identity for each
+command and a kill-on-close Job Object for its descendants. Run it as a standard
+Windows user. Build =scripts/build-windows-helper.ps1= from a Visual Studio
+SDK developer shell with Clang installed, then ship
+=build/cl-exec-sandbox-windows.exe= beside the Lisp sources. Alternatively, set
+=CL_EXEC_SANDBOX_WINDOWS_HELPER= to its absolute path outside writable scopes.
+
+Use =appcontainer-sandbox-policy= with explicit existing =:read-roots= and
+=:workspace-roots=. Include the command's binaries and dependencies in the read
+scopes. Windows also supplies its normal AppContainer system-resource access
+and private profile storage. Networking is isolated, including loopback.
+
+#+BEGIN_SRC lisp
+(let ((policy
+        (cl-exec-sandbox:appcontainer-sandbox-policy
+         :workspace-roots (list #P"C:/work/project/")
+         :read-roots (list #P"C:/tools/"))))
+  (cl-exec-sandbox:run-sandboxed
+   "C:/tools/tool.exe" '("--version")
+   :policy policy :working-directory #P"C:/work/project/" :timeout 30))
+#+END_SRC
+
+The backend rejects whole-host policies, network modes other than =:isolated=,
+proc mounts, PID namespaces, globs, drive roots, UNC/device paths, reparse
+points, hard-linked files, protected DACL trees, and paths of 240 characters
+or more. The default protected metadata names are =.git=, =.agents=, and =.codex=.
+This backend is not policy-equivalent to the Linux whole-host presets.
+
+Filesystem grants are temporary SID-specific ACL entries. Invocation execution
+and ACL changes are serialized within a Windows session. Keep the policy trees
+and their ACLs free of concurrent changes by other host processes during a run.
+Normal completion and =run-sandboxed= cancellation remove the grants and profile;
+cleanup failures are reported. Terminating both the Lisp supervisor and helper
+can leave stale SID entries and a profile. This prototype has no persistent
+crash-recovery journal. When launching a plan yourself, call
+=sandbox-plan-cleanup= after terminating and waiting for its helper.
+
+Run =(asdf:test-system :cl-exec-sandbox/windows-tests)= after compiling
+=tests/windows-child.c= to =build/windows-child.exe=. CI runs these enforcement
+tests under a disposable non-administrator account.
+
 * Example
 
 #+BEGIN_SRC lisp

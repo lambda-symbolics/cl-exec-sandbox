@@ -5,6 +5,8 @@
 #include <windows.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <aclapi.h>
+#include <sddl.h>
 
 static int write_file(const wchar_t *path) {
     HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
@@ -30,6 +32,30 @@ int wmain(int argc, wchar_t **argv) {
         return 0;
     }
     if (argc < 3) return 99;
+    if (!wcscmp(argv[1], L"acl")) {
+        PSECURITY_DESCRIPTOR descriptor = NULL;
+        DWORD error = GetNamedSecurityInfoW(argv[2], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                            NULL, NULL, NULL, NULL, &descriptor);
+        if (error) return (int)error;
+        wchar_t *text = NULL;
+        if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
+                     DACL_SECURITY_INFORMATION, &text, NULL)) return (int)GetLastError();
+        wprintf(L"%ls\n", text);
+        LocalFree(text); LocalFree(descriptor);
+        return 0;
+    }
+    if (!wcscmp(argv[1], L"write-delete")) {
+        int error = write_file(argv[2]);
+        if (error) return error;
+        return DeleteFileW(argv[2]) ? 0 : (int)GetLastError();
+    }
+    if (!wcscmp(argv[1], L"change-acl")) {
+        HANDLE file = CreateFileW(argv[2], WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        if (file == INVALID_HANDLE_VALUE) return (int)GetLastError();
+        CloseHandle(file);
+        return 0;
+    }
     if (!wcscmp(argv[1], L"write")) return write_file(argv[2]);
     if (!wcscmp(argv[1], L"read")) {
         HANDLE file = CreateFileW(argv[2], GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
@@ -59,7 +85,7 @@ int wmain(int argc, wchar_t **argv) {
     if (!wcscmp(argv[1], L"spawn") || !wcscmp(argv[1], L"spawn-exit")) {
         wchar_t executable[32768], line[32768];
         if (!GetModuleFileNameW(NULL, executable, 32768)) return 99;
-        swprintf(line, 32768, L"\"%ls\" delayed-write \"%ls\"", executable, argv[2]);
+        if (swprintf(line, 32768, L"\"%ls\" delayed-write \"%ls\"", executable, argv[2]) < 0) return 99;
         STARTUPINFOW startup = {0}; PROCESS_INFORMATION process = {0};
         startup.cb = sizeof(startup);
         if (!CreateProcessW(executable, line, NULL, NULL, FALSE, CREATE_NO_WINDOW,

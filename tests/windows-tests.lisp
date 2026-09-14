@@ -34,6 +34,15 @@
                               :timeout (or timeout 20) :output-limit 8192 :error-output-limit 8192))
              (status (arguments expected &optional (selected-policy policy))
                (let ((result (run arguments selected-policy)))
+                 (unless (= expected (sandbox-result-exit-code result))
+                   (format t "~&Resolved policy: ~S~%"
+                           (mapcar (lambda (rule)
+                                     (list (cl-exec-sandbox::resolved-filesystem-rule-access rule)
+                                           (cl-exec-sandbox::resolved-filesystem-rule-path rule)))
+                                   (cl-exec-sandbox::rules--resolve-rules selected-policy workspace)))
+                   (when (second arguments)
+                     (format t "~&Active ACL: ~A~%"
+                             (sandbox-result-output (run (list "acl" (second arguments)) selected-policy)))))
                  (check (= expected (sandbox-result-exit-code result))
                         (format nil "~S: expected ~D, got ~D; ~A"
                                 arguments expected (sandbox-result-exit-code result)
@@ -53,6 +62,7 @@
              (check (probe-file output) "workspace write actually created a file")
              (status (list "rename" (native output) (native (merge-pathnames "renamed.txt" workspace))) 0)
              (status (list "delete" (native (merge-pathnames "renamed.txt" workspace))) 0)
+             (status (list "write-delete" (native output)) 0)
              (status (list "read" (native read-file)) 0)
              (status (list "write" (native read-file)) 5)
              (status (list "read" (native outside)) 0 (unrestricted-sandbox-policy))
@@ -60,6 +70,7 @@
              (status (list "write" (native outside)) 5)
              (status (list "write" (native metadata)) 5)
              (status (list "delete" (native metadata)) 5)
+             (status (list "change-acl" (native metadata)) 5)
              (let ((result (run (list "rename" (native (merge-pathnames ".git/" workspace))
                                              (native (merge-pathnames "moved/" workspace))))))
                (check (member (sandbox-result-exit-code result) '(5 32)) "metadata root cannot be renamed"))
