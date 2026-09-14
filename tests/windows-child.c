@@ -70,7 +70,11 @@ int wmain(int argc, wchar_t **argv) {
         WSADATA data;
         if (WSAStartup(MAKEWORD(2, 2), &data)) return 99;
         SOCKET socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
-        if (socket == INVALID_SOCKET) return WSAGetLastError();
+        if (socket == INVALID_SOCKET) {
+            int error = WSAGetLastError();
+            fprintf(stderr, "WSASocketW error %d\n", error);
+            return error == WSAEACCES ? ERROR_ACCESS_DENIED : 99;
+        }
         struct sockaddr_in address;
         ZeroMemory(&address, sizeof(address));
         address.sin_family = AF_INET;
@@ -79,7 +83,8 @@ int wmain(int argc, wchar_t **argv) {
         int code = connect(socket, (struct sockaddr *)&address, sizeof(address)) ? WSAGetLastError() : 0;
         closesocket(socket);
         WSACleanup();
-        return code;
+        if (code) fprintf(stderr, "connect error %d\n", code);
+        return code == WSAEACCES ? ERROR_ACCESS_DENIED : (code ? 99 : 0);
     }
     if (!wcscmp(argv[1], L"delayed-write")) { Sleep(1500); return write_file(argv[2]); }
     if (!wcscmp(argv[1], L"spawn") || !wcscmp(argv[1], L"spawn-exit")) {

@@ -105,7 +105,7 @@
                       (sb-bsd-sockets:socket-listen server 8)
                       (let ((port (nth-value 1 (sb-bsd-sockets:socket-name server))))
                         (status (list "connect" (write-to-string port)) 0 (unrestricted-sandbox-policy))
-                        (status (list "connect" (write-to-string port)) 10013)))
+                         (status (list "connect" (write-to-string port)) 5)))
                  (sb-bsd-sockets:socket-close server)))
              (dolist (mode '("spawn-exit" "spawn"))
                (let* ((late (merge-pathnames (format nil "~A.txt" mode) workspace))
