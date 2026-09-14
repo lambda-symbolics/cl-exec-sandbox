@@ -149,8 +149,6 @@ static void set_acl(HANDLE handle, PSID sid, const wchar_t *kind, BOOL cleanup,
     SECURITY_DESCRIPTOR_CONTROL control;
     DWORD revision;
     require(GetSecurityDescriptorControl(descriptor, &control, &revision), L"read ACL control");
-    if (!cleanup && (control & SE_DACL_PROTECTED))
-        fail(L"protected DACL requires an explicit supported policy", ERROR_ACCESS_DENIED);
     DWORD capacity = original->AclSize + 2 * (sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(sid));
     PACL changed = allocate(capacity);
     require(InitializeAcl(changed, capacity, ACL_REVISION_DS), L"initialize ACL");
@@ -208,7 +206,11 @@ static void set_acl(HANDLE handle, PSID sid, const wchar_t *kind, BOOL cleanup,
         changed = granted;
     }
     if (!cleanup || found) {
-        status = SetSecurityInfo(handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+        /* Private application directories commonly disable inheritance. Walk
+         * their children explicitly and preserve protection on every update. */
+        SECURITY_INFORMATION information = DACL_SECURITY_INFORMATION;
+        if (control & SE_DACL_PROTECTED) information |= PROTECTED_DACL_SECURITY_INFORMATION;
+        status = SetSecurityInfo(handle, SE_FILE_OBJECT, information,
                                  NULL, NULL, changed, NULL);
         if (status) fail(L"update filesystem ACL", status);
     }

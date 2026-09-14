@@ -32,6 +32,18 @@ int wmain(int argc, wchar_t **argv) {
         return 0;
     }
     if (argc < 3) return 99;
+    if (!wcscmp(argv[1], L"protect-acl")) {
+        PSECURITY_DESCRIPTOR descriptor = NULL;
+        PACL acl = NULL;
+        DWORD error = GetNamedSecurityInfoW(argv[2], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                            NULL, NULL, &acl, NULL, &descriptor);
+        if (error) return (int)error;
+        error = SetNamedSecurityInfoW(argv[2], SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                    NULL, NULL, acl, NULL);
+        LocalFree(descriptor);
+        return (int)error;
+    }
     if (!wcscmp(argv[1], L"acl")) {
         PSECURITY_DESCRIPTOR descriptor = NULL;
         DWORD error = GetNamedSecurityInfoW(argv[2], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,

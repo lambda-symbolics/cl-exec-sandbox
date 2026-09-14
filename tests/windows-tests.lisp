@@ -62,9 +62,14 @@
              (uiop:copy-file
               (merge-pathnames "build/windows-child.exe"
                                (asdf:system-source-directory :cl-exec-sandbox)) payload)
+             ;; Private directories and protected metadata retain DACL protection.
+             (status (list "protect-acl" (native workspace)) 0 (unrestricted-sandbox-policy))
+             (status (list "protect-acl" (native (merge-pathnames ".git/" workspace)))
+                     0 (unrestricted-sandbox-policy))
              (setf acl-snapshots
                    (mapcar (lambda (path) (cons path (acl path)))
-                           (list workspace metadata secret programs payload read-file)))
+                           (list workspace (merge-pathnames ".git/" workspace)
+                                 metadata secret programs payload read-file)))
              (check (eq (getf (sandbox-capabilities) :backend) :appcontainer) "native backend discovered")
              (status (list "identity") 0)
              (status (list "write" (native output)) 0)
