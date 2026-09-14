@@ -163,37 +163,43 @@ static void set_acl(HANDLE handle, PSID sid, const wchar_t *kind, BOOL cleanup,
                 L"preserve ACE");
     }
     if (!cleanup) {
-        EXPLICIT_ACCESSW entries[2];
+        EXPLICIT_ACCESSW entries[4];
         ZeroMemory(entries, sizeof(entries));
-        for (unsigned i = 0; i < 2; ++i) {
+        for (unsigned i = 0; i < 4; ++i) {
             entries[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
             entries[i].Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
-            entries[i].Trustee.ptstrName = sid;
+            entries[i].Trustee.ptstrName = i % 2 ? deny_identity : sid;
             entries[i].grfInheritance = directory ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
+            entries[i].grfAccessMode = GRANT_ACCESS;
         }
-        unsigned count = 1;
+        unsigned count = 2;
         if (!wcscmp(kind, L"deny")) {
+            count = 1;
             entries[0].grfAccessMode = DENY_ACCESS;
             entries[0].Trustee.ptstrName = deny_identity;
             entries[0].grfAccessPermissions = FILE_ALL_ACCESS;
         } else {
-            entries[0].grfAccessMode = GRANT_ACCESS;
-            entries[0].grfAccessPermissions = READ_RIGHTS;
+            DWORD rights = READ_RIGHTS;
             if (!wcscmp(kind, L"write")) {
-                entries[0].grfAccessPermissions |= FILE_GENERIC_WRITE;
-                if (!root) entries[0].grfAccessPermissions |= DELETE;
+                rights |= FILE_GENERIC_WRITE;
+                if (!root) rights |= DELETE;
                 else if (directory) {
-                    count = 2;
-                    entries[1].grfAccessMode = GRANT_ACCESS;
-                    entries[1].grfAccessPermissions = DELETE;
-                    entries[1].grfInheritance |= INHERIT_ONLY;
+                    count = 4;
+                    for (unsigned i = 2; i < 4; ++i) {
+                        entries[i].grfAccessPermissions = DELETE;
+                        entries[i].grfInheritance |= INHERIT_ONLY;
+                    }
                 }
             } else {
-                count = 2;
-                entries[1].grfAccessMode = DENY_ACCESS;
-                entries[1].Trustee.ptstrName = deny_identity;
-                entries[1].grfAccessPermissions = WRITE_RIGHTS;
+                count = 3;
+                entries[2].Trustee.ptstrName = deny_identity;
+                entries[2].grfAccessMode = DENY_ACCESS;
+                entries[2].grfAccessPermissions = WRITE_RIGHTS;
             }
+            /* Explicit grants for both checks override inherited denials only
+             * where the caller supplied a more-specific allow rule. */
+            entries[0].grfAccessPermissions = rights;
+            entries[1].grfAccessPermissions = rights;
         }
         PACL granted = NULL;
         status = SetEntriesInAclW(count, entries, changed, &granted);

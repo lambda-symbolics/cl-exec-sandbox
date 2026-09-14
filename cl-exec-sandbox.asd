@@ -4,6 +4,7 @@
   :license "ISC"
   :version "0.1.0"
   :serial t
+  :encoding :utf-8
   :depends-on (#:sb-posix)
   :components ((:module "source"
                 :serial t
@@ -35,6 +36,7 @@
 (asdf:defsystem #:cl-exec-sandbox/windows-tests
   :description "Native Windows AppContainer enforcement tests."
   :depends-on (#:cl-exec-sandbox #:sb-bsd-sockets)
+  :encoding :utf-8
   :components ((:file "tests/windows-tests"))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))

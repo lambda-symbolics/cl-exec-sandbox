@@ -91,6 +91,24 @@
                       (append (sandbox-policy-filesystem-rules policy)
                               (list (make-filesystem-rule :kind :path :path denied :access :deny))))))
                (status (list "read" (native secret)) 5 denied-policy))
+             (let ((allowed (merge-pathnames "allowed.txt" denied))
+                   (readable (merge-pathnames "readable.txt" denied)))
+               (windows-test-write allowed "nested")
+               (windows-test-write readable "nested")
+               (dolist (access '(:read :deny))
+                 (let ((nested
+                         (make-sandbox-policy
+                          :workspace-roots (list workspace)
+                          :mount-proc-p nil :isolate-processes-p nil
+                          :filesystem-rules
+                          (append (sandbox-policy-filesystem-rules policy)
+                                  (list (make-filesystem-rule :kind :path :path denied :access access)
+                                        (make-filesystem-rule :kind :path :path allowed :access :write)
+                                        (make-filesystem-rule :kind :path :path readable :access :read))))))
+                   (status (list "write" (native allowed)) 0 nested)
+                   (status (list "read" (native readable)) 0 nested)
+                   (status (list "write" (native readable)) 5 nested)
+                   (status (list "write" (native secret)) 5 nested))))
              (check (string= (uiop:read-file-string outside) "private data") "outside file unchanged")
              (check (string= (uiop:read-file-string metadata) "private data") "metadata unchanged")
              (let ((result (run (list "echo" "" "two words" "a\"b" "C:\\path\\"))))

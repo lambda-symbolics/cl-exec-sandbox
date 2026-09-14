@@ -80,11 +80,26 @@ int wmain(int argc, wchar_t **argv) {
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         address.sin_port = htons((u_short)_wtoi(argv[2]));
+        u_long nonblocking = 1;
+        if (ioctlsocket(socket, FIONBIO, &nonblocking)) return 99;
         int code = connect(socket, (struct sockaddr *)&address, sizeof(address)) ? WSAGetLastError() : 0;
+        if (code == WSAEWOULDBLOCK) {
+            fd_set writable, errors;
+            FD_ZERO(&writable); FD_SET(socket, &writable);
+            FD_ZERO(&errors); FD_SET(socket, &errors);
+            struct timeval deadline = {2, 0};
+            int ready = select(0, NULL, &writable, &errors, &deadline);
+            if (ready == 0) code = WSAETIMEDOUT;
+            else if (ready == SOCKET_ERROR) code = WSAGetLastError();
+            else {
+                int size = sizeof(code);
+                if (getsockopt(socket, SOL_SOCKET, SO_ERROR, (char *)&code, &size)) code = WSAGetLastError();
+            }
+        }
         closesocket(socket);
         WSACleanup();
         if (code) fprintf(stderr, "connect error %d\n", code);
-        return code == WSAEACCES ? ERROR_ACCESS_DENIED : (code ? 99 : 0);
+        return code == WSAEACCES || code == WSAETIMEDOUT ? ERROR_ACCESS_DENIED : (code ? 99 : 0);
     }
     if (!wcscmp(argv[1], L"delayed-write")) { Sleep(1500); return write_file(argv[2]); }
     if (!wcscmp(argv[1], L"spawn") || !wcscmp(argv[1], L"spawn-exit")) {
