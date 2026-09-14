@@ -24,6 +24,7 @@
          (payload (merge-pathnames "windows-child.exe" programs))
          (policy (appcontainer-sandbox-policy :workspace-roots (list workspace)
                                               :read-roots (list programs read-root)))
+         (acl-snapshots nil)
          (checks 0))
     (labels ((check (truth description)
                (unless truth (error "Windows sandbox test failed: ~A" description))
@@ -47,6 +48,11 @@
                         (format nil "~S: expected ~D, got ~D; ~A"
                                 arguments expected (sandbox-result-exit-code result)
                                 (sandbox-result-error-output result)))))
+             (acl (path)
+               (let ((result (run (list "acl" (uiop:native-namestring path))
+                                  (unrestricted-sandbox-policy))))
+                 (check (zerop (sandbox-result-exit-code result)) "read ACL snapshot")
+                 (sandbox-result-output result)))
              (native (path) (uiop:native-namestring path)))
       (unwind-protect
            (progn
@@ -56,6 +62,9 @@
              (uiop:copy-file
               (merge-pathnames "build/windows-child.exe"
                                (asdf:system-source-directory :cl-exec-sandbox)) payload)
+             (setf acl-snapshots
+                   (mapcar (lambda (path) (cons path (acl path)))
+                           (list workspace metadata secret programs payload read-file)))
              (check (eq (getf (sandbox-capabilities) :backend) :appcontainer) "native backend discovered")
              (status (list "identity") 0)
              (status (list "write" (native output)) 0)
@@ -106,6 +115,9 @@
                      (check (zerop (sandbox-result-exit-code result)) "descendant created before parent exit"))
                  (sleep 2)
                  (check (not (probe-file late)) "process-tree termination prevented late write")))
+             (dolist (snapshot acl-snapshots)
+               (check (string= (cdr snapshot) (acl (car snapshot)))
+                      (format nil "restore ACL after execution and timeout: ~A" (car snapshot))))
              (dolist (unsupported
                        (list (read-only-sandbox-policy)
                              (workspace-write-sandbox-policy :workspace-roots (list workspace))

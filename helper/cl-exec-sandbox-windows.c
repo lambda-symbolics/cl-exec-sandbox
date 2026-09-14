@@ -300,6 +300,32 @@ static void terminate_job(HANDLE job) {
         Sleep(10);
     }
 }
+/* Package SIDs alone do not participate in Windows deny-ACE checks. Include
+ * the invocation SID in a restricting list as well as in the lowbox identity.
+ * Copy the caller's normal identities to that list so the additional check
+ * only narrows access, while AppContainer still supplies the allow boundary. */
+static HANDLE restricted_token(PSID sid) {
+    HANDLE caller, restricted;
+    require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE |
+                             TOKEN_ASSIGN_PRIMARY, &caller), L"open caller token");
+    DWORD bytes = 0;
+    GetTokenInformation(caller, TokenGroups, NULL, 0, &bytes);
+    TOKEN_GROUPS *groups = allocate(bytes);
+    require(GetTokenInformation(caller, TokenGroups, groups, bytes, &bytes), L"read caller groups");
+    DWORD user_bytes = 0;
+    GetTokenInformation(caller, TokenUser, NULL, 0, &user_bytes);
+    TOKEN_USER *user = allocate(user_bytes);
+    require(GetTokenInformation(caller, TokenUser, user, user_bytes, &user_bytes), L"read caller SID");
+    SID_AND_ATTRIBUTES *sids = allocate((groups->GroupCount + 2) * sizeof(*sids));
+    for (DWORD i = 0; i < groups->GroupCount; ++i) sids[i].Sid = groups->Groups[i].Sid;
+    sids[groups->GroupCount].Sid = user->User.Sid;
+    sids[groups->GroupCount + 1].Sid = sid;
+    require(CreateRestrictedToken(caller, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL,
+                                  groups->GroupCount + 2, sids, &restricted), L"restrict deny identity");
+    CloseHandle(caller);
+    free(sids); free(user); free(groups);
+    return restricted;
+}
 static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
                     int count, wchar_t **arguments) {
     wchar_t *job_name = join(L"Local", profile);
@@ -337,9 +363,11 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     require(UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                       handles, sizeof(handles), NULL, NULL), L"restrict inherited handles");
     wchar_t *line = command_line(count, arguments);
-    require(CreateProcessW(arguments[0], line, NULL, NULL, TRUE,
-                           EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                           NULL, cwd, &startup.StartupInfo, &process), L"create AppContainer process");
+    HANDLE token = restricted_token(sid);
+    require(CreateProcessAsUserW(token, arguments[0], line, NULL, NULL, TRUE,
+                                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                                NULL, cwd, &startup.StartupInfo, &process), L"create AppContainer process");
+    CloseHandle(token);
     if (!AssignProcessToJobObject(job, process.hProcess)) {
         DWORD error = GetLastError();
         TerminateProcess(process.hProcess, FAILURE);
