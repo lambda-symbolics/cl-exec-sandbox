@@ -48,10 +48,11 @@ can set =CL_EXEC_SANDBOX_SEATBELT= to an absolute executable path.
 
 * Windows backend
 
-The experimental Windows backend uses a fresh AppContainer identity for each
-command and a kill-on-close Job Object for its descendants. Run it as a standard
-Windows user. Build =scripts/build-windows-helper.ps1= from a Visual Studio
-SDK developer shell with Clang installed, then ship
+The experimental Windows backend combines a fresh AppContainer identity with
+an invocation-specific restricted-token SID for deny rules and a kill-on-close
+Job Object for descendants. Run it as a standard Windows user. Build
+=scripts/build-windows-helper.ps1= from a Visual Studio SDK developer shell
+with Clang installed, then ship
 =build/cl-exec-sandbox-windows.exe= beside the Lisp sources. Alternatively, set
 =CL_EXEC_SANDBOX_WINDOWS_HELPER= to its absolute path outside writable scopes.
 
@@ -76,9 +77,11 @@ points, hard-linked files, protected DACL trees, and paths of 240 characters
 or more. The default protected metadata names are =.git=, =.agents=, and =.codex=.
 This backend is not policy-equivalent to the Linux whole-host presets.
 
-Filesystem grants are temporary SID-specific ACL entries. Invocation execution
-and ACL changes are serialized within a Windows session. Keep the policy trees
-and their ACLs free of concurrent changes by other host processes during a run.
+Filesystem grants are temporary SID-specific ACL entries. Native execution
+and ACL changes are serialized within a Windows session. Serialize calls with
+overlapping roots as well, including plan construction and cleanup of missing
+metadata directories. Keep the trees and ACLs free of concurrent changes by
+other host processes during a run.
 Normal completion and =run-sandboxed= cancellation remove the grants and profile;
 cleanup failures are reported. Terminating both the Lisp supervisor and helper
 can leave stale SID entries and a profile. This prototype has no persistent

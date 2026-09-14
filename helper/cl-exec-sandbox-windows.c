@@ -1,6 +1,6 @@
 /* Native Windows filesystem/network containment. No administrator privileges.
  * The Lisp supervisor owns --cleanup, including after killing this helper.
- * Every ACL entry uses a fresh package SID, never a shared application SID. */
+ * ACL entries use fresh invocation-specific package and restricting SIDs. */
 #define UNICODE
 #define _UNICODE
 #define _WIN32_WINNT 0x0A00
