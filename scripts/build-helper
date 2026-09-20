@@ -8,20 +8,23 @@ mkdir -p "$source_root/build"
 
 compiler=${CC:-cc}
 compile_flags=(-std=c11 -O2 -Wall -Wextra -Werror -pedantic)
-link_flags=()
+compile_helper () {
+  local source_path=$1
+  local target_path=$2
 
-if [[ ${AUTOLITH_BUILD_STATIC_NATIVE:-} == 1 ]]; then
-  link_flags=(-static -no-pie)
-fi
+  if [[ ${AUTOLITH_BUILD_STATIC_NATIVE:-} == 1 ]]; then
+    "$compiler" "${compile_flags[@]}" -static -no-pie \
+      "$source_path" -o "$target_path"
+  else
+    "$compiler" "${compile_flags[@]}" \
+      "$source_path" -o "$target_path"
+  fi
+}
 
-"$compiler" "${compile_flags[@]}" \
-  "$source_root/helper/cl-exec-sandbox-process-group.c" \
-  "${link_flags[@]}" \
-  -o "$source_root/build/cl-exec-sandbox-process-group"
+compile_helper "$source_root/helper/cl-exec-sandbox-process-group.c" \
+  "$source_root/build/cl-exec-sandbox-process-group"
 
 if [[ $(uname -s) == Linux ]]; then
-  "$compiler" "${compile_flags[@]}" \
-    "$source_root/helper/cl-exec-sandbox-helper.c" \
-    "${link_flags[@]}" \
-    -o "$source_root/build/cl-exec-sandbox-helper"
+  compile_helper "$source_root/helper/cl-exec-sandbox-helper.c" \
+    "$source_root/build/cl-exec-sandbox-helper"
 fi
