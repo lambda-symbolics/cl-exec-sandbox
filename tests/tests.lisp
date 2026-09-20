@@ -426,6 +426,26 @@ host. They do not verify that macOS enforces the profile."
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
+(defun test-external-execution-without-process-group-helper ()
+  "Test full-access execution falls back when process-group supervision is absent."
+  (let ((previous (uiop:getenv "CL_EXEC_SANDBOX_PROCESS_GROUP_HELPER")))
+    (unwind-protect
+         (progn
+           (sb-posix:setenv "CL_EXEC_SANDBOX_PROCESS_GROUP_HELPER"
+                            "/nonexistent/cl-exec-sandbox-process-group"
+                            1)
+           (let ((result
+                   (run-sandboxed "/bin/sh" '("-c" "printf fallback")
+                                  :policy (external-sandbox-policy))))
+             (test-assert (zerop (sandbox-result-exit-code result))
+                          "full-access execution succeeds without the helper")
+             (test-assert (string= (sandbox-result-output result) "fallback")
+                          "full-access execution captures output without the helper")))
+      (if previous
+          (sb-posix:setenv "CL_EXEC_SANDBOX_PROCESS_GROUP_HELPER" previous 1)
+          (sb-posix:unsetenv "CL_EXEC_SANDBOX_PROCESS_GROUP_HELPER"))))
+  nil)
+
 (defun test-process-group-platform-support ()
   "Test direct supervision covers every supported POSIX release target."
   (dolist (feature '(:linux :darwin :freebsd :netbsd :openbsd))
@@ -769,6 +789,7 @@ host. They do not verify that macOS enforces the profile."
   (test-deny-glob)
   (test-unrestricted-filesystem-with-isolated-network)
   (test-external-execution-context)
+  (test-external-execution-without-process-group-helper)
   (test-process-group-platform-support)
   (test-timeout)
   (test-direct-timeout-descendant-cleanup)

@@ -21,22 +21,31 @@
 
 (defun posix--process-group-plan
     (program arguments cwd environment clear-environment-p)
-  "Return a direct launch plan whose command owns a fresh process group."
+  "Return a direct launch plan with process-group supervision when installed.
+
+Fall back to direct process supervision when a packaged application did not
+ship the optional helper. Full-access execution must not depend on a sandbox
+or helper binary."
   (let ((helper (posix--find-process-group-helper)))
-    (unless helper
-      (error 'sandbox-unavailable
-             :message "Full-access execution requires the cl-exec-sandbox process-group helper."
-             :capability :process-group-supervision))
-    (make-instance 'sandbox-plan
-                   :program helper
-                   :arguments (append (list "--" (uiop:native-namestring program))
-                                      arguments)
-                   :environment environment
-                   :environment-provided-p (or (not (null environment))
-                                               clear-environment-p)
-                   :working-directory cwd
-                   :cleanup-paths nil
-                   :termination-scope :process-group)))
+    (if helper
+        (make-instance 'sandbox-plan
+                       :program helper
+                       :arguments (append (list "--" (uiop:native-namestring program))
+                                          arguments)
+                       :environment environment
+                       :environment-provided-p (or (not (null environment))
+                                                   clear-environment-p)
+                       :working-directory cwd
+                       :cleanup-paths nil
+                       :termination-scope :process-group)
+        (make-instance 'sandbox-plan
+                       :program program
+                       :arguments arguments
+                       :environment environment
+                       :environment-provided-p (or (not (null environment))
+                                                   clear-environment-p)
+                       :working-directory cwd
+                       :cleanup-paths nil))))
 
 (defun posix--terminate-process-group (process)
   "Urgently terminate the process group led by PROCESS.
