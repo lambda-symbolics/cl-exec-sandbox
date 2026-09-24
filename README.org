@@ -23,7 +23,7 @@ Codex commit =2e1607ee2fa8099a233df7437adee5f16a741905=. Codex is a reference.
 
 * Linux backend
 
-The Linux backend targets x86-64 and SBCL. It uses the system =bwrap= binary
+The Linux backend targets x86-64 and AArch64 with SBCL. It uses the system =bwrap= binary
 for filesystem and namespace isolation, plus a private helper for
 =no_new_privs=, seccomp, and managed proxy routing. The helper lives beside
 the Lisp sources.

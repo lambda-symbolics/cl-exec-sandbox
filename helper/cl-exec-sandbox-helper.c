@@ -25,6 +25,16 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* The filter matches system call numbers compiled for this architecture, so it
+   accepts only processes running this architecture's system call ABI. */
+#if defined(__x86_64__)
+#define SECCOMP_AUDIT_ARCH AUDIT_ARCH_X86_64
+#elif defined(__aarch64__)
+#define SECCOMP_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#else
+#error "The seccomp filter supports x86-64 and AArch64 Linux."
+#endif
+
 #define MAX_ROUTES 16
 #define MAX_PROXY_VALUE 2048
 #define MAX_ROUTE_SPEC 32768
@@ -533,7 +543,7 @@ static void install_seccomp(const char *mode)
                                              offsetof(struct seccomp_data, arch)));
   append_filter(filter, &count,
                 (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
-                                             AUDIT_ARCH_X86_64, 1, 0));
+                                             SECCOMP_AUDIT_ARCH, 1, 0));
   append_filter(filter, &count,
                 (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
                                              SECCOMP_RET_KILL_PROCESS));
