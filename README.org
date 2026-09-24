@@ -6,7 +6,9 @@ Lisp. Its policy model provides:
 - read, write, and deny filesystem rules
 - literal paths, deny globs, and portable special roots
 - more-specific nested policy overrides
-- read-only host and workspace-write presets
+- read-only host and workspace-write presets that hide the user's home
+  directory, apart from workspace roots, search-path directories, and the
+  working directory inside it
 - protected project metadata such as =.git=
 - full, isolated, and managed proxy-only network modes
 - process, user, IPC, UTS, and network namespace isolation on Linux
@@ -20,6 +22,18 @@ enforce signals =sandbox-unavailable= naming the missing capability. Query
 
 The policy surface and Linux enforcement model were checked against OpenAI
 Codex commit =2e1607ee2fa8099a233df7437adee5f16a741905=. Codex is a reference.
+
+* Hidden home directory
+
+Both presets deny the =:home= special root, where credentials such as SSH
+keys, cloud tokens, and tool logins usually live, unless =:hide-home-p= is
+false. Deeper rules still apply inside it: workspace roots stay writable, and
+=:search-path= and =:working-directory= rules keep the executables on =PATH=
+and the command's starting directory readable. Every symbolic link a granted
+path passes through is granted too, so a =PATH= entry such as a Nix profile
+resolves through its chain of links. Programs that read configuration from
+=HOME= need a =HOME= outside the hidden directory; callers should point it at
+a private writable directory.
 
 * Linux backend
 
