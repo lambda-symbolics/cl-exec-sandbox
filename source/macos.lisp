@@ -60,14 +60,14 @@ names a device path explicitly still wins.")
     (not (null (or (uiop:directory-pathname-p path)
                    (and probed (uiop:directory-pathname-p probed)))))))
 
-(defun macos--path-filter (path)
+(defun macos--path-filter (path &optional literal-p)
   "Return the Seatbelt filter selecting PATH.
 
-A directory becomes a subpath filter covering its whole subtree. Any other path
-becomes a literal filter naming exactly one file, so a rule on a file cannot
-silently widen to its parent directory."
+A directory becomes a subpath filter covering its whole subtree. Any other path,
+or any path when LITERAL-P is true, becomes a literal filter naming exactly one
+file, so a rule on a file or a symbolic link cannot silently widen."
   (format nil "(~A ~A)"
-          (if (macos--directory-path-p path)
+          (if (and (not literal-p) (macos--directory-path-p path))
               "subpath"
               "literal")
           (macos--quoted-string (macos--path-string path))))
@@ -84,7 +84,9 @@ broadest first, so a narrower rule must restate every operation it changes. A
 read rule therefore denies writes explicitly: without that it would inherit the
 write allowance of the writable root it is nested inside, which is exactly the
 case for protected metadata directories."
-  (let ((filter (macos--path-filter (resolved-filesystem-rule-path rule))))
+  (let ((filter (macos--path-filter
+                 (resolved-filesystem-rule-path rule)
+                 (eq (resolved-filesystem-rule-origin rule) :link))))
     (ecase (resolved-filesystem-rule-access rule)
       (:read
        (list (format nil "(allow file-read* ~A)" filter)
@@ -93,6 +95,28 @@ case for protected metadata directories."
        (list (format nil "(allow file-read* file-write* ~A)" filter)))
       (:deny
        (list (format nil "(deny file-read* file-write* ~A)" filter))))))
+
+(defun macos--hidden-ancestors (rules)
+  "Return the directories inside denied RULES that lead to a granted rule.
+
+A lookup below a denied directory succeeds without reading its ancestors, but
+getcwd, realpath, and shells inspect each ancestor's metadata, so those
+ancestors must answer metadata queries while their contents stay hidden."
+  (let ((denied (remove-if-not (lambda (rule)
+                                 (eq (resolved-filesystem-rule-access rule) :deny))
+                               rules))
+        (ancestors nil))
+    (dolist (rule rules)
+      (unless (eq (resolved-filesystem-rule-access rule) :deny)
+        (let ((components (path--components (resolved-filesystem-rule-path rule))))
+          (loop for count from 1 below (length components)
+                for ancestor = (uiop:parse-native-namestring
+                                (format nil "/~{~A~^/~}/" (subseq components 0 count)))
+                when (some (lambda (deny)
+                             (path--under-p ancestor (resolved-filesystem-rule-path deny)))
+                           denied)
+                  do (pushnew (macos--path-string ancestor) ancestors :test #'string=)))))
+    (sort ancestors #'string<)))
 
 
 ;;;; -- Seatbelt Profile --
@@ -126,6 +150,9 @@ policy requesting them is translated without them rather than rejected."
       (dolist (rule (remove-if #'macos--root-rule-p rules))
         (dolist (operation (macos--rule-operations rule))
           (format stream "~A~%" operation)))
+      (dolist (ancestor (macos--hidden-ancestors rules))
+        (format stream "(allow file-read-metadata (literal ~A))~%"
+                (macos--quoted-string ancestor)))
       (format stream "(~A network*)~%"
               (ecase (sandbox-policy-network policy)
                 (:enabled "allow")

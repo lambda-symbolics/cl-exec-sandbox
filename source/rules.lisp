@@ -36,6 +36,17 @@ locations a POSIX host is likely to share."
 backend applies it where the host's file operations actually land."
   (rules--make-resolved-rule (path--canonical path) access origin))
 
+(defun rules--search-path-directories ()
+  "Return the existing search-path directories, leaving out any directory that
+is the home directory or contains it, since granting one would expose the
+home directory itself."
+  (let ((home (path--canonical (uiop:ensure-directory-pathname
+                                (user-homedir-pathname)))))
+    (remove-if (lambda (directory)
+                 (or (not (probe-file directory))
+                     (path--under-p home (path--canonical directory))))
+               (path--directories))))
+
 (defun rules--special-paths (rule policy cwd)
   "Expand special RULE into absolute paths for POLICY and CWD."
   (case (filesystem-rule-path rule)
@@ -43,6 +54,12 @@ backend applies it where the host's file operations actually land."
      (list #P"/"))
     (:minimal
      (remove-if-not #'probe-file (rules--platform-read-roots)))
+    (:home
+     (list (uiop:ensure-directory-pathname (user-homedir-pathname))))
+    (:search-path
+     (rules--search-path-directories))
+    (:working-directory
+     (list (uiop:ensure-directory-pathname cwd)))
     (:workspace-roots
      (let ((subpath (and (filesystem-rule-subpath rule)
                          (path--safe-relative-subpath
@@ -133,6 +150,64 @@ backend applies it where the host's file operations actually land."
                        :read
                        :protected-metadata))))
 
+(defparameter +rules-link-limit+ 40
+  "The most symbolic links one lookup follows, as a kernel bounds a lookup.")
+
+(defun rules--symbolic-link-p (namestring)
+  "Return true when NAMESTRING names a symbolic link itself."
+  #+win32
+  (declare (ignore namestring))
+  #+win32
+  nil
+  #-win32
+  (handler-case
+      (sb-posix:s-islnk (sb-posix:stat-mode (sb-posix:lstat namestring)))
+    (sb-posix:syscall-error ()
+      nil)))
+
+(defun rules--links (path)
+  "Return the symbolic links a lookup of absolute PATH passes through, each as
+the native namestring of the link itself inside its resolved parent.
+
+Resolved rules name only link targets, but a lookup must still read every link
+on the way, which a hidden directory such as the home directory would refuse."
+  (let ((links nil)
+        (pending (path--components path))
+        (current "")
+        (followed 0))
+    (loop while pending
+          do (let* ((component (pop pending))
+                    (candidate (concatenate 'string current "/" component)))
+               (cond
+                 ((string= component ".")
+                  nil)
+                 ((string= component "..")
+                  (setf current (subseq current 0 (or (position #\/ current
+                                                                :from-end t)
+                                                      0))))
+                 ((and (< followed +rules-link-limit+)
+                       (rules--symbolic-link-p candidate))
+                  (let ((target (sb-posix:readlink candidate)))
+                    (incf followed)
+                    (push candidate links)
+                    (when (uiop:string-prefix-p "/" target)
+                      (setf current ""))
+                    (setf pending
+                          (append (remove "" (uiop:split-string target :separator "/")
+                                          :test #'string=)
+                                  pending))))
+                 (t
+                  (setf current candidate)))))
+    (nreverse links)))
+
+(defun rules--link-rules (path)
+  "Return read rules for the symbolic links a lookup of PATH passes through."
+  (mapcar (lambda (link)
+            (rules--make-resolved-rule (uiop:parse-native-namestring link)
+                                       :read
+                                       :link))
+          (rules--links path)))
+
 (defun rules--resolve-rules (policy cwd)
   "Return POLICY's absolute rules sorted from broadest to most specific.
 
@@ -145,17 +220,21 @@ a nested rule is established after the rule it narrows."
     (dolist (rule (sandbox-policy-filesystem-rules policy))
       (ecase (filesystem-rule-kind rule)
         (:path
-         (push (rules--resolved-rule
-                (path--absolute (filesystem-rule-path rule) cwd)
-                (filesystem-rule-access rule)
-                :path)
-               rules))
+         (let ((path (path--absolute (filesystem-rule-path rule) cwd)))
+           (push (rules--resolved-rule path (filesystem-rule-access rule) :path)
+                 rules)
+           (unless (eq (filesystem-rule-access rule) :deny)
+             (dolist (link (rules--link-rules path))
+               (push link rules)))))
         (:special
          (dolist (path (rules--special-paths rule policy cwd))
            (push (rules--resolved-rule path
                                        (filesystem-rule-access rule)
                                        :special)
-                 rules)))
+                 rules)
+           (unless (eq (filesystem-rule-access rule) :deny)
+             (dolist (link (rules--link-rules path))
+               (push link rules)))))
         (:glob
          (dolist (path (rules--expand-glob-rule rule policy cwd))
            (push (rules--resolved-rule path :deny :glob) rules)))))

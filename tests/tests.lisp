@@ -71,8 +71,19 @@
            :workspace-roots (list (uiop:getcwd)))))
     (test-assert (eq (sandbox-policy-network policy) :isolated)
                  "workspace-write defaults to isolated networking")
-    (test-assert (= (length (sandbox-policy-filesystem-rules policy)) 4)
+    (test-assert (= (length (sandbox-policy-filesystem-rules policy)) 7)
                  "workspace-write grants root read, project write, and temp writes")
+    (test-assert (find-if (lambda (rule)
+                            (and (eq (filesystem-rule-path rule) :home)
+                                 (eq (filesystem-rule-access rule) :deny)))
+                          (sandbox-policy-filesystem-rules policy))
+                 "workspace-write hides the home directory by default")
+    (test-assert (= (length (sandbox-policy-filesystem-rules
+                             (workspace-write-sandbox-policy
+                              :workspace-roots (list (uiop:getcwd))
+                              :hide-home-p nil)))
+                    4)
+                 "workspace-write can leave the home directory readable")
     (test-assert
      (handler-case
          (progn
@@ -301,6 +312,90 @@ unless it is resolved before translation."
                           "the outside process survives the attempt"))
         (uiop:terminate-process victim :urgent t)
         (uiop:wait-process victim))))
+  nil)
+
+(defun tests--call-with-environment (bindings function)
+  "Call FUNCTION with each (NAME VALUE) in BINDINGS set, restoring them after."
+  (let ((previous (mapcar (lambda (binding)
+                            (list (first binding) (uiop:getenv (first binding))))
+                          bindings)))
+    (unwind-protect
+         (progn
+           (dolist (binding bindings)
+             (sb-posix:setenv (first binding) (second binding) 1))
+           (funcall function))
+      (dolist (binding previous)
+        (if (second binding)
+            (sb-posix:setenv (first binding) (second binding) 1)
+            (sb-posix:unsetenv (first binding)))))))
+
+(defun test-hidden-home ()
+  "Test the presets hide the home directory apart from what commands need.
+
+A secret in the home directory stays unreadable, while a workspace, a
+search-path directory, and a search-path directory reached through a chain of
+symbolic links, as a Nix profile is, remain usable inside it."
+  (when (sandbox-supported-p)
+    (let* ((root (tests--temporary-root))
+           (home (merge-pathnames "home/" root))
+           (workspace (merge-pathnames "work/project/" home))
+           (home-bin (merge-pathnames ".local/bin/" home))
+           (store-bin (merge-pathnames "store/profile/bin/" root))
+           (native (lambda (path)
+                     (string-right-trim "/" (uiop:native-namestring path)))))
+      (unwind-protect
+           (progn
+             (tests--write (merge-pathnames "secret" home) "s3cret")
+             (ensure-directories-exist workspace)
+             (dolist (tool (list (cons home-bin "home-tool")
+                                 (cons store-bin "store-tool")))
+               (let ((path (tests--write (merge-pathnames (rest tool) (first tool))
+                                         (format nil "#!/bin/sh~%echo ~A~%"
+                                                 (rest tool)))))
+                 (sb-posix:chmod (uiop:native-namestring path) #o755)))
+             (sb-posix:symlink (funcall native (merge-pathnames "store/profile/" root))
+                               (funcall native (merge-pathnames ".profile-1-link" home)))
+             (sb-posix:symlink ".profile-1-link"
+                               (funcall native (merge-pathnames ".profile" home)))
+             (tests--call-with-environment
+              (list (list "HOME" (funcall native home))
+                    (list "PATH" (format nil "~A:~A/.profile/bin:/usr/bin:/bin"
+                                         (funcall native home-bin)
+                                         (funcall native home))))
+              (lambda ()
+                (flet ((run (command &optional (hide-home-p t))
+                         (run-sandboxed
+                          "/bin/sh" (list "-c" command)
+                          :policy (workspace-write-sandbox-policy
+                                   :workspace-roots (list workspace)
+                                   :hide-home-p hide-home-p)
+                          :working-directory workspace
+                          :merge-output-p t)))
+                  (test-assert (not (zerop (sandbox-result-exit-code
+                                            (run "cat \"$HOME/secret\""))))
+                               "a hidden home keeps its files unreadable")
+                  (test-assert (not (zerop (sandbox-result-exit-code
+                                            (run "ls \"$HOME\""))))
+                               "a hidden home cannot be listed")
+                  (let ((result (run "pwd -P && echo made > made && cat made")))
+                    (test-assert (and (zerop (sandbox-result-exit-code result))
+                                      (search "made" (sandbox-result-output result))
+                                      (search (funcall native (cl-exec-sandbox::path--canonical
+                                                               workspace))
+                                              (sandbox-result-output result)))
+                                 (format nil "a workspace inside a hidden home stays usable: ~A"
+                                         (sandbox-result-output result))))
+                  (test-assert (search "home-tool"
+                                       (sandbox-result-output (run "home-tool")))
+                               "a search-path directory inside a hidden home runs")
+                  (test-assert (search "store-tool"
+                                       (sandbox-result-output (run "store-tool")))
+                               "a search-path directory reached through links runs")
+                  (test-assert (search "s3cret"
+                                       (sandbox-result-output
+                                        (run "cat \"$HOME/secret\"" nil)))
+                               "a policy can leave the home directory readable")))))
+        (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore))))
   nil)
 
 (defun test-read-only-enforcement ()
@@ -855,6 +950,7 @@ Only a backend reporting :NETWORK-PROXY-ONLY can run the check."
   (test-seatbelt-profile-translation)
   (test-linked-rule-paths)
   (test-outside-signal-denial)
+  (test-hidden-home)
   (test-read-only-enforcement)
   (test-workspace-write-enforcement)
   (test-missing-protected-metadata)

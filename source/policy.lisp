@@ -47,7 +47,8 @@
        (error 'sandbox-policy-error
               :message "A glob filesystem rule requires a non-empty pattern.")))
     (:special
-     (unless (member path '(:root :minimal :workspace-roots :tmpdir :slash-tmp))
+     (unless (member path '(:root :minimal :home :search-path :working-directory
+                            :workspace-roots :tmpdir :slash-tmp))
        (error 'sandbox-policy-error
               :message "Unknown special filesystem path token."))
      (when (and subpath (not (eq path :workspace-roots)))
@@ -172,12 +173,25 @@
   "Return one literal PATH rule granting ACCESS."
   (make-filesystem-rule :kind :path :path path :access access))
 
-(defun read-only-sandbox-policy (&key (network :isolated) workspace-roots)
-  "Return a whole-filesystem read-only policy."
+(defun policy--hidden-home-rules ()
+  "Return rules hiding the user's home directory while keeping the executables
+on the search path and the command's working directory readable."
+  (list (policy--special-rule :home :deny)
+        (policy--special-rule :search-path :read)
+        (policy--special-rule :working-directory :read)))
+
+(defun read-only-sandbox-policy
+    (&key (network :isolated) workspace-roots (hide-home-p t))
+  "Return a whole-filesystem read-only policy.
+
+Unless HIDE-HOME-P is false, the user's home directory is hidden, apart from
+workspace roots, search-path directories, and the working directory inside it,
+so commands cannot read the credentials and private files kept there."
   (make-sandbox-policy
    :network network
    :workspace-roots workspace-roots
-   :filesystem-rules (list (policy--special-rule :root :read))))
+   :filesystem-rules (append (list (policy--special-rule :root :read))
+                             (and hide-home-p (policy--hidden-home-rules)))))
 
 (defun workspace-write-sandbox-policy
     (&key
@@ -185,13 +199,19 @@
        (network :isolated)
        (write-tmpdir-p t)
        (write-slash-tmp-p t)
+       (hide-home-p t)
        (protected-metadata-names '(".git" ".agents" ".codex")))
-  "Return a read-only host policy with writable project and temporary roots."
+  "Return a read-only host policy with writable project and temporary roots.
+
+Unless HIDE-HOME-P is false, the user's home directory is hidden, apart from
+workspace roots, search-path directories, and the working directory inside it,
+so commands cannot read the credentials and private files kept there."
   (unless workspace-roots
     (error 'sandbox-policy-error
            :message "A workspace-write policy requires at least one workspace root."))
-  (let ((rules (list (policy--special-rule :root :read)
-                     (policy--special-rule :workspace-roots :write))))
+  (let ((rules (append (list (policy--special-rule :root :read))
+                       (and hide-home-p (policy--hidden-home-rules))
+                       (list (policy--special-rule :workspace-roots :write)))))
     (when write-slash-tmp-p
       (setf rules (append rules (list (policy--special-rule :slash-tmp :write)))))
     (when write-tmpdir-p
