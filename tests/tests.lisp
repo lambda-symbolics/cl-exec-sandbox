@@ -794,7 +794,11 @@ unless it is resolved before translation."
        port))))
 
 (defun test-managed-proxy-network ()
-  "Test proxy-only networking reaches a loopback proxy and rewrites its URL."
+  "Test proxy-only networking reaches a loopback proxy and rewrites its URL.
+
+Only a backend reporting :NETWORK-PROXY-ONLY can run the check."
+  (unless (sandbox-supported-p :network-proxy-only)
+    (return-from test-managed-proxy-network nil))
   (multiple-value-bind (server thread port)
       (tests--start-proxy-server)
     (unwind-protect
