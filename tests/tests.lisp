@@ -129,6 +129,12 @@
   "Return POLICY translated into a Seatbelt profile for the current directory."
   (cl-exec-sandbox::macos--seatbelt-profile policy (uiop:getcwd)))
 
+(defun tests--resolved (path)
+  "Return PATH's native namestring as rule resolution reports it: with
+symbolic links resolved and without a trailing separator."
+  (string-right-trim "/" (uiop:native-namestring
+                          (cl-exec-sandbox::path--canonical path))))
+
 (defun tests--before-p (profile earlier later)
   "Return true when EARLIER appears in PROFILE strictly before LATER."
   (let ((earlier-position (search earlier profile))
@@ -174,9 +180,7 @@ host. They do not verify that macOS enforces the profile."
                         (unrestricted-sandbox-policy :network :isolated)))
                "an unrestricted policy allows writes everywhere")
   (let* ((root (tests--temporary-root))
-         (metadata (string-right-trim
-                    "/"
-                    (uiop:native-namestring (merge-pathnames ".git/" root)))))
+         (metadata (tests--resolved (merge-pathnames ".git/" root))))
     (unwind-protect
          (let ((profile
                  (tests--seatbelt-profile
@@ -185,7 +189,7 @@ host. They do not verify that macOS enforces the profile."
                    :protected-metadata-names '(".git")))))
            (test-assert
             (search (format nil "(allow file-read* file-write* (subpath ~S))"
-                            (string-right-trim "/" (uiop:native-namestring root)))
+                            (tests--resolved root))
                     profile)
             "a workspace root becomes writable")
            (test-assert (search (format nil "(deny file-write* (subpath ~S))"
@@ -196,10 +200,11 @@ host. They do not verify that macOS enforces the profile."
             (tests--before-p
              profile
              (format nil "(allow file-read* file-write* (subpath ~S))"
-                     (string-right-trim "/" (uiop:native-namestring root)))
+                     (tests--resolved root))
              (format nil "(deny file-write* (subpath ~S))" metadata))
             "protected metadata is denied after its writable root")
-           (test-assert (search "(allow file-read* file-write* (subpath \"/tmp\"))"
+           (test-assert (search (format nil "(allow file-read* file-write* (subpath ~S))"
+                                        (tests--resolved #P"/tmp/"))
                                 profile)
                         "a workspace-write policy keeps /tmp writable"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
@@ -219,18 +224,61 @@ host. They do not verify that macOS enforces the profile."
                                                :access :deny))))))
            (test-assert
             (search (format nil "(deny file-read* file-write* (literal ~S))"
-                            (uiop:native-namestring file))
+                            (tests--resolved file))
                     profile)
             "a rule naming one file uses a literal filter")
            (test-assert
-            (not (search (format nil "(subpath ~S)"
-                                 (uiop:native-namestring file))
+            (not (search (format nil "(subpath ~S)" (tests--resolved file))
                          profile))
             "a rule naming one file does not widen to a subpath"))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   (test-assert (string= (cl-exec-sandbox::macos--quoted-string "a\"b\\c")
                         "\"a\\\"b\\\\c\"")
                "profile strings escape quotes and backslashes")
+  nil)
+
+(defun test-linked-rule-paths ()
+  "Test that rules resolve symbolic links in their longest existing prefix.
+
+Seatbelt matches resolved paths, so a rule naming a link never applies
+unless it is resolved before translation."
+  #-win32
+  (let* ((root (tests--temporary-root))
+         (real (merge-pathnames "real/" root))
+         (link (merge-pathnames "link/" root)))
+    (unwind-protect
+         (progn
+           (ensure-directories-exist real)
+           (sb-posix:symlink (uiop:native-namestring real)
+                             (string-right-trim "/" (uiop:native-namestring link)))
+           (test-assert (equal (cl-exec-sandbox::path--canonical link)
+                               (truename real))
+                        "a linked directory resolves to its target")
+           (test-assert (equal (cl-exec-sandbox::path--canonical
+                                (merge-pathnames "missing/child" link))
+                               (merge-pathnames "missing/child" (truename real)))
+                        "missing trailing components survive resolution")
+           (test-assert (uiop:directory-pathname-p
+                         (cl-exec-sandbox::path--canonical
+                          (merge-pathnames "missing/" link)))
+                        "a missing directory stays a directory")
+           (test-assert (equal (cl-exec-sandbox::path--canonical #P"/") #P"/")
+                        "the root resolves to itself")
+           (let ((profile (tests--seatbelt-profile
+                           (workspace-write-sandbox-policy
+                            :workspace-roots (list link)))))
+             (test-assert
+              (search (format nil "(allow file-read* file-write* (subpath ~S))"
+                              (tests--resolved real))
+                      profile)
+              "a linked workspace root grants its target")
+             (test-assert
+              (not (search (format nil "(subpath ~S)"
+                                   (string-right-trim
+                                    "/" (uiop:native-namestring link)))
+                           profile))
+              "a linked workspace root never names the link")))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
 
 (defun test-read-only-enforcement ()
@@ -782,6 +830,7 @@ host. They do not verify that macOS enforces the profile."
   (test-bwrap-override)
   (test-seatbelt-override)
   (test-seatbelt-profile-translation)
+  (test-linked-rule-paths)
   (test-read-only-enforcement)
   (test-workspace-write-enforcement)
   (test-missing-protected-metadata)

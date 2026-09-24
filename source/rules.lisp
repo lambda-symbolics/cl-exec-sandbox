@@ -25,11 +25,16 @@ locations a POSIX host is likely to share."
 ;;;; -- Resolved Rules --
 
 (defstruct (resolved-filesystem-rule
-            (:constructor rules--resolved-rule (path access origin)))
+            (:constructor rules--make-resolved-rule (path access origin)))
   "One absolute filesystem rule after special-path and glob expansion."
   (path #P"/" :type pathname)
   (access :read :type (member :read :write :deny))
   (origin :path :type keyword))
+
+(defun rules--resolved-rule (path access origin)
+  "Return a resolved rule for PATH with symbolic links resolved, so every
+backend applies it where the host's file operations actually land."
+  (rules--make-resolved-rule (path--canonical path) access origin))
 
 (defun rules--special-paths (rule policy cwd)
   "Expand special RULE into absolute paths for POLICY and CWD."

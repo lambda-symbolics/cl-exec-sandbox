@@ -26,6 +26,31 @@
   "Resolve PATH against CWD without requiring it to exist."
   (uiop:ensure-absolute-pathname (pathname path) cwd))
 
+(defun path--canonical (path)
+  "Return absolute PATH with symbolic links resolved in its longest existing
+prefix, keeping any missing trailing components and whether PATH names a
+directory.
+
+Seatbelt matches the resolved path of every file operation, so a rule naming
+a link such as macOS's /tmp or /var never applies unless it is resolved first.
+Windows leaves links unresolved in TRUENAME, so there PATH is returned as is."
+  #+win32
+  path
+  #-win32
+  (let ((components (path--components path)))
+    (loop for count from (length components) downto 0
+          for existing = (probe-file (format nil "/~{~A~^/~}"
+                                             (subseq components 0 count)))
+          when existing
+            return (let ((resolved
+                           (format nil "~A~{/~A~}"
+                                   (string-right-trim
+                                    "/" (uiop:native-namestring existing))
+                                   (nthcdr count components))))
+                     (uiop:parse-native-namestring
+                      (if (zerop (length resolved)) "/" resolved)
+                      :ensure-directory (null (pathname-name (pathname path))))))))
+
 (defun path--safe-relative-subpath (subpath)
   "Return SUBPATH as a relative pathname or signal a policy error."
   (let ((pathname (pathname subpath)))
