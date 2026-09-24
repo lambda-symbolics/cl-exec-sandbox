@@ -51,13 +51,14 @@
   "Return true when PATH exists without requiring directory syntax agreement."
   (not (null (probe-file path))))
 
-(defun linux--writable-descendants (rule rules)
-  "Return writable RULES strictly below denied directory RULE."
+(defun linux--visible-descendants (rule rules)
+  "Return readable or writable RULES strictly below denied directory RULE,
+whose mount points must exist before the mask becomes read-only."
   (let ((path (resolved-filesystem-rule-path rule)))
     (remove-if-not
      (lambda (candidate)
        (let ((candidate-path (resolved-filesystem-rule-path candidate)))
-         (and (eq (resolved-filesystem-rule-access candidate) :write)
+         (and (member (resolved-filesystem-rule-access candidate) '(:read :write))
               (not (equal candidate-path path))
               (path--under-p candidate-path path))))
      rules)))
@@ -79,23 +80,30 @@
                     (list "--dir" (uiop:native-namestring directory)))))))
 
 (defun linux--append-directory-mask (arguments target permissions descendants)
-  "Append a read-only empty directory mask at TARGET with PERMISSIONS."
+  "Append an empty directory mask at TARGET with PERMISSIONS.
+
+The mask stays writable until every rule is mounted, so the caller remounts
+TARGET read-only afterwards; bubblewrap then creates the mount points of
+DESCENDANTS inside it, whether they are directories or files."
   (setf arguments
         (append arguments (list "--perms" permissions "--tmpfs" target)))
-  (dolist (descendant descendants)
+  (dolist (descendant descendants arguments)
     (setf arguments
           (linux--append-descendant-parent-arguments
            arguments
            (resolved-filesystem-rule-path descendant)
-           (pathname target))))
-  (append arguments (list "--remount-ro" target)))
+           (pathname target)))))
 
 (defun linux--append-rule-arguments
     (arguments rule minimal-root-p deny-file-mask rules)
-  "Append RULE's effective mount operation to ARGUMENTS."
+  "Append RULE's effective mount operation to ARGUMENTS.
+
+Return two values: the extended arguments, and the directory masks RULE
+created, which must be remounted read-only once every rule is mounted."
   (let* ((path (resolved-filesystem-rule-path rule))
          (target (uiop:native-namestring path))
-         (source (and (probe-file path) target)))
+         (source (and (probe-file path) target))
+         (masks nil))
     (when minimal-root-p
       (setf arguments (linux--append-target-parent-arguments arguments path)))
     (case (resolved-filesystem-rule-access rule)
@@ -108,7 +116,8 @@
       (:deny
        (if (or (not (probe-file path))
                (uiop:directory-pathname-p (probe-file path)))
-           (let ((descendants (linux--writable-descendants rule rules)))
+           (let ((descendants (linux--visible-descendants rule rules)))
+             (push target masks)
              (setf arguments
                    (linux--append-directory-mask
                     arguments target
@@ -124,9 +133,10 @@
               :message "Unknown resolved filesystem access.")))
     (when (and (eq (resolved-filesystem-rule-origin rule) :protected-metadata)
                (not (probe-file path)))
+      (push target masks)
       (setf arguments
             (linux--append-directory-mask arguments target "555" nil)))
-    arguments))
+    (values arguments (nreverse masks))))
 
 (defun linux--temporary-mask-file ()
   "Create and return a mode-000 host file suitable for denying one sandbox path."
@@ -230,25 +240,40 @@
            (bwrap-arguments
              (linux--base-arguments policy cwd root-access
                                     environment clear-environment-p)))
-      (when (and helper minimal-root-p)
-        (setf bwrap-arguments
-              (linux--append-target-parent-arguments bwrap-arguments helper)
-              bwrap-arguments
-              (append bwrap-arguments
-                      (list "--ro-bind"
-                            (uiop:native-namestring helper)
-                            (uiop:native-namestring helper)))))
-      (dolist (rule rules)
-        (unless (string= (uiop:native-namestring
-                          (resolved-filesystem-rule-path rule))
-                         "/")
-          (setf bwrap-arguments
+      (let ((masks nil)
+            ;; Masks must keep a path to the helper, which is mounted into
+            ;; them like any visible descendant.
+            (visible (if helper
+                         (cons (rules--make-resolved-rule helper :read :helper)
+                               rules)
+                         rules)))
+        (dolist (rule rules)
+          (unless (string= (uiop:native-namestring
+                            (resolved-filesystem-rule-path rule))
+                           "/")
+            (multiple-value-bind (extended rule-masks)
                 (linux--append-rule-arguments
                  bwrap-arguments
                  rule
                  minimal-root-p
                  deny-file-mask
-                 rules))))
+                 visible)
+              (setf bwrap-arguments extended
+                    masks (append masks rule-masks)))))
+        ;; The helper is bound after every rule, so no rule can hide it, and
+        ;; before the masks become read-only, so its mount point can be made.
+        (when helper
+          (when minimal-root-p
+            (setf bwrap-arguments
+                  (linux--append-target-parent-arguments bwrap-arguments helper)))
+          (setf bwrap-arguments
+                (append bwrap-arguments
+                        (list "--ro-bind"
+                              (uiop:native-namestring helper)
+                              (uiop:native-namestring helper)))))
+        (dolist (mask masks)
+          (setf bwrap-arguments
+                (append bwrap-arguments (list "--remount-ro" mask)))))
       (let* ((network (sandbox-policy-network policy))
              (inner-command
                (if helper
