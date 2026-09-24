@@ -466,10 +466,7 @@ unless it is resolved before translation."
     (unwind-protect
          (test-assert
           (string= (sandbox-result-output result)
-                   (format nil "~A|present"
-                           (string-right-trim
-                            "/"
-                            (uiop:native-namestring root))))
+                   (format nil "~A|present" (tests--resolved root)))
           "direct execution applies working directory and environment")
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
   nil)
