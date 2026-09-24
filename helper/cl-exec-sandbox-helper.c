@@ -547,6 +547,19 @@ static void install_seccomp(const char *mode)
   append_filter(filter, &count,
                 (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
                                              SECCOMP_RET_KILL_PROCESS));
+#if defined(__x86_64__)
+  /* x32 system calls share the x86-64 architecture value but carry
+     __X32_SYSCALL_BIT, so their numbers never match the denials below. */
+  append_filter(filter, &count,
+                (struct sock_filter)BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+                                             offsetof(struct seccomp_data, nr)));
+  append_filter(filter, &count,
+                (struct sock_filter)BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K,
+                                             __X32_SYSCALL_BIT, 0, 1));
+  append_filter(filter, &count,
+                (struct sock_filter)BPF_STMT(BPF_RET | BPF_K,
+                                             SECCOMP_RET_KILL_PROCESS));
+#endif
 
   append_denied_syscall(filter, &count, SYS_ptrace);
   append_denied_syscall(filter, &count, SYS_process_vm_readv);
