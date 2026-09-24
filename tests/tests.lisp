@@ -153,6 +153,9 @@ host. They do not verify that macOS enforces the profile."
                  "a profile opens by denying every operation")
     (test-assert (search "(allow process*)" profile)
                  "a profile grants the operations a command needs to start")
+    (test-assert (and (search "(allow signal (target same-sandbox))" profile)
+                      (not (search "(allow signal)" profile)))
+                 "a profile lets commands signal only their own sandbox")
     (test-assert (search "(allow file-read* (subpath \"/\"))" profile)
                  "a read-only root policy allows reads everywhere")
     (test-assert (search "(deny file-write* (subpath \"/\"))" profile)
@@ -279,6 +282,25 @@ unless it is resolved before translation."
                            profile))
               "a linked workspace root never names the link")))
       (uiop:delete-directory-tree root :validate t :if-does-not-exist :ignore)))
+  nil)
+
+(defun test-outside-signal-denial ()
+  "Test a sandboxed command cannot signal a process outside its sandbox."
+  (when (sandbox-supported-p)
+    (let ((victim (uiop:launch-program '("sleep" "60"))))
+      (unwind-protect
+           (let ((result
+                   (run-sandboxed
+                    "/bin/sh"
+                    (list "-c" (format nil "kill -TERM ~D"
+                                       (uiop:process-info-pid victim)))
+                    :policy (read-only-sandbox-policy))))
+             (test-assert (not (zerop (sandbox-result-exit-code result)))
+                          "signalling an outside process fails")
+             (test-assert (uiop:process-alive-p victim)
+                          "the outside process survives the attempt"))
+        (uiop:terminate-process victim :urgent t)
+        (uiop:wait-process victim))))
   nil)
 
 (defun test-read-only-enforcement ()
@@ -832,6 +854,7 @@ Only a backend reporting :NETWORK-PROXY-ONLY can run the check."
   (test-seatbelt-override)
   (test-seatbelt-profile-translation)
   (test-linked-rule-paths)
+  (test-outside-signal-denial)
   (test-read-only-enforcement)
   (test-workspace-write-enforcement)
   (test-missing-protected-metadata)

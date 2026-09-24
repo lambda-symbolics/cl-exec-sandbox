@@ -18,13 +18,15 @@
 
 (defparameter +macos-baseline-operations+
   '("(allow process*)"
-    "(allow signal)"
+    "(allow signal (target same-sandbox))"
     "(allow sysctl-read)"
     "(allow mach-lookup)")
   "Non-filesystem operations every profile grants so a command can start.
 
 Denying a process launch, a signal, a sysctl read, or a Mach lookup stops even
-a trivial command from running on macOS.")
+a trivial command from running on macOS. Signals reach only processes in the
+same sandbox, so a command can manage its own descendants but never signal
+the user's other processes.")
 
 (defparameter +macos-device-operation+
   "(allow file-read* file-write* (subpath \"/dev\"))"
