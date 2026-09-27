@@ -153,10 +153,19 @@ policy requesting them is translated without them rather than rejected."
       (dolist (ancestor (macos--hidden-ancestors rules))
         (format stream "(allow file-read-metadata (literal ~A))~%"
                 (macos--quoted-string ancestor)))
-      (format stream "(~A network*)~%"
-              (ecase (sandbox-policy-network policy)
-                (:enabled "allow")
-                (:isolated "deny"))))))
+      (cond
+        ((eq (sandbox-policy-network policy) :isolated)
+         (format stream "(deny network*)~%"))
+        ((sandbox-policy-unix-socket-paths policy)
+         (format stream "(allow network-outbound (remote ip))~%")
+         (format stream "(allow network-inbound (local ip))~%")
+         (dolist (path (sandbox-policy-unix-socket-paths policy))
+           (format stream
+                   "(allow network-outbound (remote unix-socket (path-literal ~A)))~%"
+                   (macos--quoted-string
+                    (macos--path-string (path--canonical path))))))
+        (t
+         (format stream "(allow network*)~%"))))))
 
 
 ;;;; -- Seatbelt Plan --

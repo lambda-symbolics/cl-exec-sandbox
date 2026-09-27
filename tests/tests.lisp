@@ -93,7 +93,29 @@
          t))
      "glob rules reject positive access")
     (test-assert (getf (sandbox-capabilities) :filesystem-read-write-deny)
-                 "Linux capability discovery finds bubblewrap"))
+                 "Linux capability discovery finds bubblewrap")
+    (test-assert
+     (handler-case
+         (progn (make-sandbox-policy :unix-socket-paths '("relative.sock")) nil)
+       (sandbox-policy-error () t))
+     "socket allowlists reject relative paths")
+    (test-assert
+     (handler-case
+         (progn (make-sandbox-policy :unix-socket-paths '("/tmp/broker.sock")) nil)
+       (sandbox-policy-error () t))
+     "socket allowlists require enabled networking")
+    (let ((arguments
+            (cl-exec-sandbox::linux--base-arguments
+             (make-sandbox-policy :network :enabled
+                                  :private-tmp-p t
+                                  :private-runtime-p t)
+             (uiop:getcwd) ':read nil nil)))
+      (dolist (path '("/tmp" "/run" "/var/tmp"))
+        (test-assert
+         (loop for (option target) on arguments
+               thereis (and (string= option "--tmpfs")
+                            (string= target path)))
+         (format nil "Linux hides host sockets in ~A" path)))))
   nil)
 
 (defun test-bwrap-override ()
@@ -185,6 +207,21 @@ host. They do not verify that macOS enforces the profile."
                        (tests--seatbelt-profile
                         (read-only-sandbox-policy :network :enabled)))
                "an enabled policy allows networking")
+  (let ((profile
+          (tests--seatbelt-profile
+           (make-sandbox-policy
+            :network :enabled
+            :unix-socket-paths '("/tmp/broker.sock")))))
+    (test-assert (search "(allow network-outbound (remote ip))" profile)
+                 "a socket allowlist preserves IP networking")
+    (test-assert
+     (search (format nil
+                     "(allow network-outbound (remote unix-socket (path-literal ~S)))"
+                     (tests--resolved #P"/tmp/broker.sock"))
+             profile)
+     "a socket allowlist permits the exact broker socket")
+    (test-assert (not (search "(allow network*)" profile))
+                 "a socket allowlist does not permit other Unix sockets"))
   (test-assert
    (handler-case
        (progn (tests--seatbelt-profile

@@ -193,6 +193,21 @@ created, which must be remounted read-only once every rule is mounted."
                                   (uiop:native-namestring root)
                                   (uiop:native-namestring root))))))))
     (setf arguments (append arguments (list "--dev" "/dev")))
+    (when (sandbox-policy-private-tmp-p policy)
+      (setf arguments (append arguments (list "--tmpfs" "/tmp"))))
+    (when (sandbox-policy-private-runtime-p policy)
+      (setf arguments
+            (append arguments (list "--tmpfs" "/run"
+                                    "--tmpfs" "/var/tmp")))
+      (let ((resolver (probe-file #P"/etc/resolv.conf")))
+        (when (and resolver (path--under-p resolver #P"/run/"))
+          (setf arguments
+                (linux--append-target-parent-arguments arguments resolver)
+                arguments
+                (append arguments
+                        (list "--ro-bind"
+                              (uiop:native-namestring resolver)
+                              (uiop:native-namestring resolver)))))))
     (when (sandbox-policy-mount-proc-p policy)
       (setf arguments (append arguments (list "--proc" "/proc"))))
     (when clear-environment-p
@@ -251,15 +266,39 @@ created, which must be remounted read-only once every rule is mounted."
           (unless (string= (uiop:native-namestring
                             (resolved-filesystem-rule-path rule))
                            "/")
-            (multiple-value-bind (extended rule-masks)
-                (linux--append-rule-arguments
-                 bwrap-arguments
-                 rule
-                 minimal-root-p
-                 deny-file-mask
-                 visible)
-              (setf bwrap-arguments extended
-                    masks (append masks rule-masks)))))
+            (if (and (eq (resolved-filesystem-rule-access rule) :write)
+                     (or (and (sandbox-policy-private-tmp-p policy)
+                              (string= (string-right-trim
+                                        "/" (uiop:native-namestring
+                                             (resolved-filesystem-rule-path rule)))
+                                       "/tmp"))
+                         (and (sandbox-policy-private-runtime-p policy)
+                              (member (string-right-trim
+                                       "/" (uiop:native-namestring
+                                            (resolved-filesystem-rule-path rule)))
+                                      '("/run" "/var/tmp") :test #'string=))))
+                nil
+                (multiple-value-bind (extended rule-masks)
+                    (linux--append-rule-arguments
+                     (if (and (or (sandbox-policy-private-tmp-p policy)
+                                  (sandbox-policy-private-runtime-p policy))
+                              (some (lambda (root)
+                                      (path--under-p
+                                       (resolved-filesystem-rule-path rule) root))
+                                    (append
+                                     (when (sandbox-policy-private-tmp-p policy)
+                                       (list #P"/tmp/"))
+                                     (when (sandbox-policy-private-runtime-p policy)
+                                       (list #P"/run/" #P"/var/tmp/")))))
+                         (linux--append-target-parent-arguments
+                          bwrap-arguments (resolved-filesystem-rule-path rule))
+                         bwrap-arguments)
+                     rule
+                     minimal-root-p
+                     deny-file-mask
+                     visible)
+                  (setf bwrap-arguments extended
+                        masks (append masks rule-masks))))))
         ;; The helper is bound after every rule, so no rule can hide it, and
         ;; before the masks become read-only, so its mount point can be made.
         (when helper

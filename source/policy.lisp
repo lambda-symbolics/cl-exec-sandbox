@@ -79,6 +79,21 @@
     :reader sandbox-policy-network
     :type (member :enabled :isolated :proxy-only)
     :documentation "The network namespace and syscall policy.")
+   (unix-socket-paths
+    :initarg :unix-socket-paths
+    :reader sandbox-policy-unix-socket-paths
+    :type list
+    :documentation "Exact Unix sockets reachable under macOS Seatbelt.")
+   (private-tmp-p
+    :initarg :private-tmp-p
+    :reader sandbox-policy-private-tmp-p
+    :type boolean
+    :documentation "Whether Linux mounts a private /tmp rather than the host /tmp.")
+   (private-runtime-p
+    :initarg :private-runtime-p
+    :reader sandbox-policy-private-runtime-p
+    :type boolean
+    :documentation "Whether Linux hides host sockets in /run and /var/tmp.")
    (workspace-roots
     :initarg :workspace-roots
     :reader sandbox-policy-workspace-roots
@@ -119,6 +134,9 @@
        (filesystem-kind :restricted)
        (filesystem-rules nil)
        (network :isolated)
+       (unix-socket-paths nil)
+       (private-tmp-p nil)
+       (private-runtime-p nil)
        (workspace-roots nil)
        glob-scan-maximum-depth
        (mount-proc-p t)
@@ -134,6 +152,16 @@
   (when (and (eq filesystem-kind :external) (not (eq network :enabled)))
     (error 'sandbox-policy-error
            :message "An :EXTERNAL policy cannot request library-managed networking."))
+  (when (and unix-socket-paths (not (eq network :enabled)))
+    (error 'sandbox-policy-error
+           :message "Unix socket access requires enabled networking."))
+  (unless (every (lambda (path)
+                   (and (or (pathnamep path) (stringp path))
+                        (uiop:absolute-pathname-p (pathname path))
+                        (not (uiop:directory-pathname-p (pathname path)))))
+                 unix-socket-paths)
+    (error 'sandbox-policy-error
+           :message "Unix socket paths must name absolute files."))
   (unless (every (lambda (rule) (typep rule 'filesystem-rule)) filesystem-rules)
     (error 'sandbox-policy-error
            :message "FILESYSTEM-RULES must contain only FILESYSTEM-RULE instances."))
@@ -152,6 +180,9 @@
                  :filesystem-kind filesystem-kind
                  :filesystem-rules (copy-list filesystem-rules)
                  :network network
+                 :unix-socket-paths (mapcar #'pathname unix-socket-paths)
+                 :private-tmp-p (not (null private-tmp-p))
+                 :private-runtime-p (not (null private-runtime-p))
                  :workspace-roots
                  (mapcar (lambda (path)
                            (policy--absolute-directory path "A workspace root"))

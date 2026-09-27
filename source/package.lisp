@@ -19,6 +19,9 @@
    #:sandbox-policy-filesystem-kind
    #:sandbox-policy-filesystem-rules
    #:sandbox-policy-network
+   #:sandbox-policy-unix-socket-paths
+   #:sandbox-policy-private-tmp-p
+   #:sandbox-policy-private-runtime-p
    #:sandbox-policy-workspace-roots
    #:sandbox-policy-glob-scan-maximum-depth
    #:sandbox-policy-mount-proc-p
