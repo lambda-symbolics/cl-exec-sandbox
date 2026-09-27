@@ -55,7 +55,12 @@ On macOS:
 
 - =:enabled= and =:isolated= networking work
 - =sandbox-capabilities= reports =:process-namespaces= as false
-- process separation is an accidental-damage boundary
+- process launch and same-sandbox signals work, while host process inspection
+  and Mach service lookup are denied by default
+
+Seatbelt has no process namespace. Callers handling untrusted code must also
+keep their trusted process and approval input outside the sandbox and restrict
+every broker operation to a trusted policy.
 
 Deny globs need =rg= on either host. Seatbelt installations outside =/usr/bin=
 can set =CL_EXEC_SANDBOX_SEATBELT= to an absolute executable path.

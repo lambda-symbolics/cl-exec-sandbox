@@ -17,16 +17,16 @@
 ;;;; -- Profile Filters --
 
 (defparameter +macos-baseline-operations+
-  '("(allow process*)"
+  '("(allow process-exec)"
+    "(allow process-fork)"
     "(allow signal (target same-sandbox))"
-    "(allow sysctl-read)"
-    "(allow mach-lookup)")
+    "(allow sysctl-read)")
   "Non-filesystem operations every profile grants so a command can start.
 
-Denying a process launch, a signal, a sysctl read, or a Mach lookup stops even
-a trivial command from running on macOS. Signals reach only processes in the
-same sandbox, so a command can manage its own descendants but never signal
-the user's other processes.")
+Commands can launch descendants and read the sysctls needed by the runtime.
+Signals reach only processes in the same sandbox. Other process operations and
+Mach service lookup remain denied so the command cannot inspect host processes
+or ask host credential services for secrets.")
 
 (defparameter +macos-device-operation+
   "(allow file-read* file-write* (subpath \"/dev\"))"
