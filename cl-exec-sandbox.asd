@@ -19,6 +19,7 @@
                              (:file "macos")
                              (:file "windows")
                              (:file "backend")
+                             (:file "capture")
                              (:file "execute"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:cl-exec-sandbox/tests))))
 
@@ -28,7 +29,8 @@
   :serial t
   :components ((:module "tests"
                 :serial t
-                :components ((:file "tests"))))
+                :components ((:file "tests")
+                             (:file "capture-tests"))))
   :perform (asdf:test-op (operation component)
              (declare (ignore operation component))
              (uiop:symbol-call '#:cl-exec-sandbox/tests '#:run-tests)))

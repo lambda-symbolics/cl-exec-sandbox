@@ -11,7 +11,7 @@ Lisp. Its policy model provides:
 - full, isolated, and managed proxy-only network modes
 - process, user, IPC, UTS, and network namespace isolation on Linux
 - fresh =/proc= and minimal =/dev= mounts
-- child timeouts and optionally bounded captured output
+- child timeouts, cancellation, bounded raw-byte capture and retained files
 - explicit capability discovery
 
 One policy is translated by a per-host backend. A policy a backend cannot
@@ -113,16 +113,85 @@ When a limit is exceeded, the returned prefix is available through
 =sandbox-result-output-truncated-p= and
 =sandbox-result-error-output-truncated-p= before presenting captured output.
 
+* Retained raw output
+
+=run-sandboxed= drains binary stdout/stderr pipes into private files. Set
+=:capture-directory= to an existing caller-owned private directory, or set
+=:retain-output-p t= to retain generated temporary files. The caller owns retained
+files and their deletion. Without either option, capture files are removed after
+the final callback. The per-stream =:capture-byte-limit= defaults to 67,108,864
+bytes and must be a finite non-negative integer. Excess bytes are drained and
+counted without increasing disk usage.
+
+#+BEGIN_SRC lisp
+(let* ((result (cl-exec-sandbox:run-sandboxed
+                "/bin/sh" '("-c" "make")
+                :policy (cl-exec-sandbox:unrestricted-sandbox-policy)
+                :capture-directory #P"/private/command-logs/"
+                :capture-byte-limit (* 32 1024 1024)
+                :output-limit 0 :error-output-limit 0))
+       (capture (cl-exec-sandbox:sandbox-result-error-capture result)))
+  (multiple-value-bind (head tail omitted)
+      (cl-exec-sandbox:sample-capture capture :head-bytes 1024 :tail-bytes 4096)
+    (values (cl-exec-sandbox:decode-capture-bytes head)
+            (cl-exec-sandbox:decode-capture-bytes tail)
+            omitted)))
+#+END_SRC
+
+Inspect =sandbox-result-output-capture= and =sandbox-result-error-capture=.
+With =:merge-output-p t=, stdout and stderr share the output capture and the
+error capture is NIL. Separate streams have independent ordering. Capture
+metadata includes =sandbox-capture-path=, =sandbox-capture-byte-count= (actual
+closed file size), =sandbox-capture-observed-byte-count= (bytes drained),
+=sandbox-capture-complete-p=, =sandbox-capture-truncated-p= and
+=sandbox-capture-status=. Status is one of =:complete=, =:limit=, =:write-error=,
+=:interrupted=, =:timeout=, =:cancelled= or =:launch-failed=. Completeness requires
+ordinary command completion, EOF and successful storage of all drained bytes;
+a nonzero command exit can have a complete capture. Storage limits/failures
+retain the bytes successfully written and continue draining the child.
+=sandbox-capture-retained-p= identifies caller-owned files; transient metadata
+records the captured bytes even though cleanup removes the file.
+
+=sample-capture= returns three values: raw head octets, non-overlapping tail
+octets, and omitted retained bytes. It seeks directly to the tail and allocates
+only the requested samples. =decode-capture-bytes= renders UTF-8 with replacement
+characters for malformed input; the retained file preserves raw bytes.
+The legacy =:output-limit= and =:error-output-limit= count rendered characters.
+Retained modes default omitted text limits to zero, so result construction
+uses bounded memory. Transient legacy capture defaults to complete rendered
+text; pass explicit NIL for that behavior in retained mode, or a finite limit.
+
+=:cancel-function= is a zero-argument predicate polled during execution.
+=sandbox-result-status= distinguishes =:exited=, =:timeout=, =:cancelled=,
+=:launch-failed= and =:interrupted=; timeout and cancellation also have boolean
+result accessors. =:capture-created-function= receives initial result metadata
+synchronously after capture allocation and before native launch, allowing the
+caller to durably record paths before command side effects. Initial byte counts
+are zero, exit code is NIL and status is =:interrupted= with completeness false.
+An error in this callback prevents launch.
+
+=:capture-function= receives final result metadata on normal completion and
+every executor unwind, after termination, pipe shutdown and file closure.
+Launch failures signal =sandbox-execution-error= with the final result through
+=sandbox-execution-error-result=. Input/policy validation occurs before capture
+setup. Callback failures cannot skip process cleanup. Pipes held open by
+surviving descendants have bounded reader shutdown and an incomplete capture.
+Asynchronous interrupts are deferred through ordered cleanup and the final
+callback. Keep metadata callbacks brief.
+On POSIX, generated files have mode 0600; on Windows they inherit the private
+capture directory's ACL. Allocate a directory accessible only to its owner.
+
 * Checks
 
-Build the private Linux helper and run the complete test suite:
+Build the host's private helper and run the complete supported-host test suite:
 
 #+BEGIN_SRC sh
 ./check
 #+END_SRC
 
-Seatbelt profile translation is a pure function of a policy, so its tests run
-on any host. They assert the generated profile text.
+Portable execution, retained capture and Seatbelt profile translation cases run
+on POSIX hosts. Linux-only enforcement cases are explicitly skipped elsewhere.
+Run the separate native Windows test system for AppContainer enforcement.
 
 Applications which vendor this system should run =scripts/build-helper= during
 their build and ship =build/cl-exec-sandbox-process-group= beside the Lisp

@@ -8,6 +8,7 @@
    #:sandbox-unavailable-capability
    #:sandbox-execution-error
    #:sandbox-execution-error-command
+   #:sandbox-execution-error-result
    #:filesystem-rule
    #:make-filesystem-rule
    #:filesystem-rule-kind
@@ -47,6 +48,20 @@
    #:sandbox-result-error-output-truncated-p
    #:sandbox-result-timed-out-p
    #:sandbox-result-real-seconds
+   #:sandbox-result-output-capture
+   #:sandbox-result-error-capture
+   #:sandbox-result-cancelled-p
+   #:sandbox-result-status
+   #:sandbox-capture
+   #:sandbox-capture-path
+   #:sandbox-capture-retained-p
+   #:sandbox-capture-byte-count
+   #:sandbox-capture-observed-byte-count
+   #:sandbox-capture-complete-p
+   #:sandbox-capture-truncated-p
+   #:sandbox-capture-status
+   #:sample-capture
+   #:decode-capture-bytes
    #:run-sandboxed))
 
 (defpackage #:cl-exec-sandbox/tests

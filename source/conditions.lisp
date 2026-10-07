@@ -27,5 +27,8 @@
     :initarg :command
     :reader sandbox-execution-error-command
     :type list
-    :documentation "The command that could not be started or supervised."))
+     :documentation "The command that could not be started or supervised.")
+   (result :initarg :result :initform nil
+           :reader sandbox-execution-error-result
+           :documentation "Final capture metadata when execution had begun."))
   (:documentation "A sandboxed process could not be launched or supervised."))
