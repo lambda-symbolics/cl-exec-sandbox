@@ -19,6 +19,7 @@
 #define READ_RIGHTS (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE)
 #define MAX_RULES 128
 #define MAX_PINS 1024
+#define MAX_EXTENDED_PATH 32767
 
 static HANDLE pins[MAX_PINS];
 static unsigned pin_count;
@@ -55,12 +56,13 @@ static void check_hr(HRESULT hr, const wchar_t *operation) {
 }
 static wchar_t *join(const wchar_t *root, const wchar_t *leaf) {
     size_t n = wcslen(root);
-    if (n + wcslen(leaf) + 1 >= 240)
+    size_t leaf_length = wcslen(leaf);
+    if (leaf_length > MAX_EXTENDED_PATH - 2 || n > MAX_EXTENDED_PATH - leaf_length - 2)
         fail(L"filesystem path too long", ERROR_FILENAME_EXCED_RANGE);
-    wchar_t *result = allocate((n + wcslen(leaf) + 2) * sizeof(wchar_t));
+    wchar_t *result = allocate((n + leaf_length + 2) * sizeof(wchar_t));
     memcpy(result, root, n * sizeof(wchar_t));
     if (n && root[n - 1] != L'\\') result[n++] = L'\\';
-    memcpy(result + n, leaf, (wcslen(leaf) + 1) * sizeof(wchar_t));
+    memcpy(result + n, leaf, (leaf_length + 1) * sizeof(wchar_t));
     return result;
 }
 static void validate_profile(const wchar_t *profile) {
@@ -83,9 +85,9 @@ static void new_profile(void) {
  * A grant must not be redirected through a junction, ADS, device or UNC path. */
 static wchar_t *local_path(const wchar_t *input) {
     size_t n = wcslen(input);
-    if (n <= 3 || n >= 240 || !iswalpha(input[0]) || input[1] != L':' ||
+    if (n <= 3 || n > MAX_EXTENDED_PATH - 4 || !iswalpha(input[0]) || input[1] != L':' ||
         (input[2] != L'\\' && input[2] != L'/'))
-        fail(L"expected a non-root local path shorter than 240 characters", ERROR_INVALID_NAME);
+        fail(L"expected a non-root local path within the Windows path limit", ERROR_INVALID_NAME);
     wchar_t *path = allocate((n + 1) * sizeof(wchar_t));
     memcpy(path, input, (n + 1) * sizeof(wchar_t));
     for (size_t i = 2; i < n; ++i) {
@@ -99,9 +101,39 @@ static wchar_t *local_path(const wchar_t *input) {
     while (n > 3 && path[n - 1] == L'\\') path[--n] = 0;
     return path;
 }
+static wchar_t *extended_path(const wchar_t *path) {
+    size_t n = wcslen(path);
+    BOOL extended = n >= 7 && !wcsncmp(path, L"\\\\?\\", 4);
+    const wchar_t *drive = extended ? path + 4 : path;
+    size_t prefix = extended ? 0 : 4;
+    if (wcslen(drive) <= 3 || !iswalpha(drive[0]) || drive[1] != L':' ||
+        (drive[2] != L'\\' && drive[2] != L'/'))
+        fail(L"refuse non-local filesystem path", ERROR_INVALID_NAME);
+    if (n > MAX_EXTENDED_PATH - prefix)
+        fail(L"filesystem path too long", ERROR_FILENAME_EXCED_RANGE);
+    wchar_t *result = allocate((n + prefix + 1) * sizeof(wchar_t));
+    if (prefix) memcpy(result, L"\\\\?\\", 4 * sizeof(wchar_t));
+    memcpy(result + prefix, path, (n + 1) * sizeof(wchar_t));
+    for (size_t i = prefix; i < n + prefix; ++i)
+        if (result[i] == L'/') result[i] = L'\\';
+    return result;
+}
 static HANDLE open_path(const wchar_t *path, DWORD access, DWORD share) {
-    return CreateFileW(path, access, share, NULL, OPEN_EXISTING,
-                       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    wchar_t *native = extended_path(path);
+    HANDLE result = CreateFileW(native, access, share, NULL, OPEN_EXISTING,
+                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    DWORD error = GetLastError();
+    free(native);
+    SetLastError(error);
+    return result;
+}
+static DWORD file_attributes(const wchar_t *path) {
+    wchar_t *native = extended_path(path);
+    DWORD result = GetFileAttributesW(native);
+    DWORD error = GetLastError();
+    free(native);
+    SetLastError(error);
+    return result;
 }
 static BY_HANDLE_FILE_INFORMATION info(HANDLE handle) {
     BY_HANDLE_FILE_INFORMATION result;
@@ -245,10 +277,13 @@ static void walk(const wchar_t *path, PSID sid, const wchar_t *kind,
     if (!directory || reparse) { CloseHandle(handle); return; }
     wchar_t *pattern = join(path, L"*");
     WIN32_FIND_DATAW data;
-    HANDLE search = FindFirstFileW(pattern, &data);
+    wchar_t *native_pattern = extended_path(pattern);
+    HANDLE search = FindFirstFileW(native_pattern, &data);
+    DWORD search_error = GetLastError();
+    free(native_pattern);
     free(pattern);
     if (search == INVALID_HANDLE_VALUE) {
-        DWORD error = GetLastError();
+        DWORD error = search_error;
         if (error == ERROR_FILE_NOT_FOUND) { CloseHandle(handle); return; }
         fail(L"enumerate filesystem policy", error);
     }
@@ -401,6 +436,20 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     free(line);
     return status;
 }
+static wchar_t *module_path(void) {
+    DWORD capacity = MAX_PATH;
+    const DWORD maximum = MAX_EXTENDED_PATH + 1;
+    for (;;) {
+        wchar_t *path = allocate(capacity * sizeof(wchar_t));
+        DWORD length = GetModuleFileNameW(NULL, path, capacity);
+        if (!length) fail(L"locate helper executable", GetLastError());
+        if (length < capacity) return path;
+        free(path);
+        if (capacity == maximum)
+            fail(L"helper executable path too long", ERROR_FILENAME_EXCED_RANGE);
+        capacity = capacity > maximum / 2 ? maximum : capacity * 2;
+    }
+}
 int wmain(int argc, wchar_t **argv) {
     if (argc == 2 && !wcscmp(argv[1], L"--new-profile")) { new_profile(); return 0; }
     if (argc == 2 && !wcscmp(argv[1], L"--probe")) { puts("appcontainer-v1"); return 0; }
@@ -426,12 +475,11 @@ int wmain(int argc, wchar_t **argv) {
              *GetSidSubAuthority(sid, 1), *GetSidSubAuthority(sid, 2),
              *GetSidSubAuthority(sid, 3), *GetSidSubAuthority(sid, 4),
              0, 0, 0, &deny_identity), L"derive invocation deny SID");
-    wchar_t executable[MAX_PATH];
-    DWORD length = GetModuleFileNameW(NULL, executable, MAX_PATH);
-    require(length && length < MAX_PATH, L"locate helper executable");
+    wchar_t *executable = module_path();
     HANDLE self = open_path(executable, FILE_READ_ATTRIBUTES, FILE_SHARE_READ);
     if (self == INVALID_HANDLE_VALUE) fail(L"pin helper executable", GetLastError());
     helper_identity = info(self);
+    free(executable);
     HANDLE mutex;
     if (cleanup) {
         wchar_t *name = join(L"Local", argv[2]);
@@ -440,7 +488,7 @@ int wmain(int argc, wchar_t **argv) {
         if (job) { terminate_job(job); CloseHandle(job); }
         mutex = lock_acls();
         for (int i = start; i < end; i += 2)
-            if (GetFileAttributesW(paths[(i - start) / 2]) != INVALID_FILE_ATTRIBUTES)
+            if (file_attributes(paths[(i - start) / 2]) != INVALID_FILE_ATTRIBUTES)
                 pin_path(paths[(i - start) / 2]);
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 2, TRUE, 0);

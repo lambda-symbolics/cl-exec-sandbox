@@ -13,6 +13,8 @@
                 (format nil "sandbox-Lukáš-žluťoučký-~36R/" (get-universal-time))
                 (uiop:temporary-directory)))
          (workspace (merge-pathnames "workspace/" root))
+         (long-root (merge-pathnames "long-component-0123456789abcdef/long-component-0123456789abcdef/long-component-0123456789abcdef/long-component-0123456789abcdef/long-component-0123456789abcdef/long-component-0123456789abcdef/long-component-0123456789abcdef/long-component-0123456789abcdef/" workspace))
+         (long-file (merge-pathnames "long-file.txt" long-root))
          (programs (merge-pathnames "programs/" root))
          (read-root (merge-pathnames "read only/" root))
          (outside (merge-pathnames "outside/private.txt" root))
@@ -24,6 +26,8 @@
          (payload (merge-pathnames "windows-child.exe" programs))
          (policy (appcontainer-sandbox-policy :workspace-roots (list workspace)
                                               :read-roots (list programs read-root)))
+         (long-policy (appcontainer-sandbox-policy :workspace-roots (list long-root)
+                                                    :read-roots (list workspace programs)))
          (acl-snapshots nil)
          (checks 0))
     (labels ((check (truth description)
@@ -56,7 +60,7 @@
              (native (path) (uiop:native-namestring path)))
       (unwind-protect
            (progn
-             (dolist (file (list outside read-file secret metadata))
+             (dolist (file (list outside read-file secret metadata long-file))
                (windows-test-write file "private data"))
              (ensure-directories-exist payload)
              (uiop:copy-file
@@ -71,7 +75,12 @@
                            (list workspace (merge-pathnames ".git/" workspace)
                                  metadata secret programs payload read-file)))
              (check (eq (getf (sandbox-capabilities) :backend) :appcontainer) "native backend discovered")
-             (status (list "identity") 0)
+
+             (let ((result (run-sandboxed (native payload) (list "identity")
+                                           :policy long-policy :working-directory workspace
+                                          :timeout 20 :output-limit 8192 :error-output-limit 8192)))
+               (check (zerop (sandbox-result-exit-code result))
+                      "long local path survives native sandbox setup"))
              (dolist (command (list (list "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" "-NoProfile" "-NonInteractive" "-Command" "Write-Output shell-ok")))
                (let ((result (run-sandboxed (first command) (rest command)
                                           :policy policy :working-directory workspace :timeout 20)))
