@@ -429,6 +429,60 @@
       (uiop:delete-directory-tree root :validate t :if-does-not-exist ':ignore)))
   nil)
 
+(defun test-retained-cooperative-cancellation (&optional (repetitions 20))
+  "Early cooperative cancellation reaps commands and closes both capture modes."
+  (let ((root (tests--temporary-root)))
+    (unwind-protect
+         (dotimes (iteration repetitions)
+           (let ((created (sb-thread:make-semaphore))
+                 (cancelled-p nil)
+                 (merged-p (evenp iteration))
+                 (callback-count 0)
+                 (final nil)
+                 (worker nil))
+             (unwind-protect
+                  (progn
+                    (setf worker
+                          (sb-thread:make-thread
+                           (lambda ()
+                             (run-sandboxed "/bin/sh" '("-c" "printf started; sleep 30")
+                                            :policy (unrestricted-sandbox-policy)
+                                            :capture-directory root :merge-output-p merged-p
+                                            :output-limit 0 :error-output-limit 0
+                                            :capture-created-function
+                                            (lambda (result)
+                                              (declare (ignore result))
+                                              (sb-thread:signal-semaphore created))
+                                            :cancel-function (lambda () cancelled-p)
+                                            :capture-function
+                                            (lambda (result)
+                                              (incf callback-count)
+                                              (setf final result))))
+                           :name "cooperative retained cancellation"))
+                    (test-assert (sb-thread:wait-on-semaphore created :timeout 2)
+                                 "prelaunch captures are published before cancellation")
+                    (setf cancelled-p t)
+                    (test-assert (sb-thread:join-thread worker :timeout 2 :default nil)
+                                 "early cancellation terminates within bounded cleanup time")
+                    (test-assert (and final (= callback-count 1)
+                                      (sandbox-result-cancelled-p final)
+                                      (integerp (sandbox-result-exit-code final)))
+                                 "cancellation publishes one final result after native exit")
+                    (dolist (capture (remove nil (list (sandbox-result-output-capture final)
+                                                      (sandbox-result-error-capture final))))
+                      (test-assert (and (eq (sandbox-capture-status capture) ':cancelled)
+                                        (not (sandbox-capture-complete-p capture))
+                                        (= (sandbox-capture-byte-count capture)
+                                           (length (capture-tests--bytes
+                                                    (sandbox-capture-path capture)))))
+                                   "cancelled capture metadata describes the closed retained file")))
+               (setf cancelled-p t)
+               (when (and worker (sb-thread:thread-alive-p worker))
+                 (ignore-errors (sb-thread:terminate-thread worker))
+                 (ignore-errors (sb-thread:join-thread worker :timeout 2 :default nil))))))
+      (uiop:delete-directory-tree root :validate t :if-does-not-exist ':ignore)))
+  nil)
+
 (defun run-capture-tests ()
   "Run the retained raw-byte capture contracts."
   (test-retained-byte-capture)
@@ -440,5 +494,6 @@
   (test-retained-capture-creation)
   (test-transient-capture-cleanup)
   (test-retained-capture-repeated-interrupt)
+  (test-retained-cooperative-cancellation)
   (test-capture-rendering-defaults)
   t)

@@ -109,6 +109,15 @@
       #-sbcl
       (funcall ownership-function (launch)))))
 
+(defun execute--wait-process (process)
+  "Poll PROCESS to native exit before retrieving its final status.
+
+Cleanup defers asynchronous interruptions. On SBCL, waiting for a running
+process enters an event loop whose SIGCHLD wakeup can be deferred in that
+scope. Polling status observes native exit without depending on that wakeup."
+  (loop while (uiop:process-alive-p process) do (sleep 0.01))
+  (uiop:wait-process process))
+
 (defun execute--terminate-process (plan process)
   "Urgently terminate and reap PLAN's native process scope."
   (when (ignore-errors (uiop:process-alive-p process))
@@ -117,7 +126,7 @@
        (ignore-errors (uiop:terminate-process process :urgent t)))
       (:process-group
        (ignore-errors (posix--terminate-process-group process)))))
-  (ignore-errors (uiop:wait-process process))
+  (ignore-errors (execute--wait-process process))
   nil)
 
 (defun execute--join-reader (thread capture)
@@ -228,7 +237,7 @@
         (when process
           (unless (eq status ':exited)
             (execute--terminate-process plan process))
-          (setf exit-code (ignore-errors (uiop:wait-process process))))
+          (setf exit-code (ignore-errors (execute--wait-process process))))
         (dolist (reader readers)
           (execute--join-reader (first reader) (rest reader)))
         (when process
