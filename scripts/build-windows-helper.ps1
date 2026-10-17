@@ -14,7 +14,7 @@ $lockPath = Join-Path $PSScriptRoot 'windows-dependency.lock'
 $defaultOutput = Join-Path $root 'build'
 
 function Invoke-Native([string]$Program, [string[]]$Arguments) {
-  & $Program @Arguments
+  & $Program @Arguments | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }
 }
 function Invoke-Captured([string]$Program, [string[]]$Arguments) {
@@ -95,6 +95,10 @@ if (-not $InternalBuild) {
     $source = Read-DetoursSource $lockData $env:CL_EXEC_SANDBOX_DETOURS_SOURCE $sourceTemp
     Invoke-ArchBuild 'x64' $stageRoot $source
     Invoke-ArchBuild 'x86' $stageRoot $source
+    foreach ($buildOnly in @('dependency', 'x64', 'x86')) {
+      $path = Join-Path $stageRoot $buildOnly
+      if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+    }
     $outputs = @('cl-exec-sandbox-windows.exe', 'cl-exec-sandbox-compat64.dll', 'cl-exec-sandbox-compat32.dll', 'LICENSE-Detours.txt')
     foreach ($name in $outputs) {
       $path = Join-Path $stageRoot $name
@@ -152,7 +156,10 @@ try {
     Invoke-Native cl.exe (@('/nologo', "/I$include", '/O2', '/MT', '/W4', '/WX', $cobj) + $objects + @($lib, 'advapi32.lib', 'userenv.lib', 'ole32.lib', 'ntdll.lib', "/Fe:$(Join-Path $archStage 'cl-exec-sandbox-windows.exe')"))
   }
   $dll = if ($Architecture -eq 'x64') { 'cl-exec-sandbox-compat64.dll' } else { 'cl-exec-sandbox-compat32.dll' }
-  Invoke-Native cl.exe @('/nologo', "/I$include", '/LD', '/O2', '/MT', '/W4', '/WX', '/DCL_EXEC_SANDBOX_NULL_DLL', "/Fe:$(Join-Path $archStage $dll)", (Join-Path $root 'helper/windows-compat.cpp'), (Join-Path $root 'helper/windows-inject.cpp'), $lib, 'advapi32.lib', 'userenv.lib', 'ole32.lib', 'ntdll.lib', '/link', '/EXPORT:DetourFinishHelperProcess,@1,NONAME')
+  $dllObjectDirectory = Join-Path $archStage 'dll-objects'
+  New-Item -ItemType Directory -Path $dllObjectDirectory -Force | Out-Null
+  $dllObjectOutput = $dllObjectDirectory + '\'
+  Invoke-Native cl.exe @('/nologo', "/I$include", '/LD', '/O2', '/MT', '/W4', '/WX', '/EHsc', '/DCL_EXEC_SANDBOX_NULL_DLL', "/Fo$dllObjectOutput", "/Fe:$(Join-Path $archStage $dll)", (Join-Path $root 'helper/windows-compat.cpp'), (Join-Path $root 'helper/windows-inject.cpp'), $lib, 'advapi32.lib', 'userenv.lib', 'ole32.lib', 'ntdll.lib', '/link', '/EXPORT:DetourFinishHelperProcess,@1,NONAME')
   if ($Architecture -eq 'x86') { Copy-Item (Join-Path $DetoursSource 'LICENSE.md') (Join-Path $archStage 'LICENSE-Detours.txt') }
   Copy-Item (Join-Path $archStage $dll) (Join-Path $Stage $dll)
   if ($Architecture -eq 'x64') { Copy-Item (Join-Path $archStage 'cl-exec-sandbox-windows.exe') (Join-Path $Stage 'cl-exec-sandbox-windows.exe') }
