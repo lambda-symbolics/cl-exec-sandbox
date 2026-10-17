@@ -375,22 +375,18 @@ static HANDLE restricted_token(void) {
     free(sids); free(user); free(groups);
     return restricted;
 }
-#ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
-#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
-extern BOOL sandbox_inject_null(HANDLE process, const wchar_t *profile);
+extern BOOL sandbox_inject_null(HANDLE process, HANDLE job, const wchar_t *profile);
 extern BOOL sandbox_remove_null_alias(const wchar_t *profile);
 extern BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *profile);
 extern void sandbox_stop_broker(void);
-#endif
+#ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
 static int diagnostic_mode(void) {
     char mode[32];
     DWORD length = GetEnvironmentVariableA("CL_EXEC_SANDBOX_DIAGNOSTIC_MODE", mode, sizeof(mode));
     if (!length || length >= sizeof(mode) || !strcmp(mode, "combined")) return 0;
     if (!strcmp(mode, "restricted-only")) return 1;
     if (!strcmp(mode, "appcontainer-only")) return 2;
-#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
     if (!strcmp(mode, "combined-hook")) return 3;
-#endif
     fail(L"unknown diagnostic token mode", ERROR_INVALID_PARAMETER);
     return 0;
 }
@@ -424,6 +420,7 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     int mode = diagnostic_mode();
     DWORD attribute_count = mode == 1 ? 1 : 2;
 #else
+    int mode = 3;
     DWORD attribute_count = 2;
 #endif
     InitializeProcThreadAttributeList(NULL, attribute_count, 0, &bytes);
@@ -457,24 +454,22 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     }
     if (!AssignProcessToJobObject(job, process.hProcess)) {
         DWORD error = GetLastError();
-        TerminateProcess(process.hProcess, FAILURE);
-        WaitForSingleObject(process.hProcess, INFINITE);
+        require(TerminateProcess(process.hProcess, FAILURE), L"terminate unassigned suspended process");
+        DWORD waited = WaitForSingleObject(process.hProcess, 30000);
+        if (waited != WAIT_OBJECT_0)
+            fail(L"reap unassigned suspended process", waited == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError());
         fail(L"assign suspended process to job", error);
     }
-#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
     if (mode == 3) {
         require(sandbox_start_broker(job, sid, profile), L"start native compatibility broker");
-        require(sandbox_inject_null(process.hProcess, profile), L"inject native compatibility client");
+        require(sandbox_inject_null(process.hProcess, job, profile), L"inject native compatibility client");
     }
-#endif
     require(ResumeThread(process.hThread) != (DWORD)-1, L"start contained process");
     require(WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0, L"wait for command");
     DWORD status;
     require(GetExitCodeProcess(process.hProcess, &status), L"read command exit code");
     terminate_job(job);
-#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
     if (mode == 3) sandbox_stop_broker();
-#endif
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
     CloseHandle(job);
@@ -534,9 +529,7 @@ int wmain(int argc, wchar_t **argv) {
         HANDLE job = OpenJobObjectW(JOB_OBJECT_TERMINATE | JOB_OBJECT_QUERY, FALSE, name);
         free(name);
         if (job) { terminate_job(job); CloseHandle(job); }
-#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
         require(sandbox_remove_null_alias(argv[2]), L"remove private import alias");
-#endif
         mutex = lock_acls();
         for (int i = start; i < end; i += 2)
             if (file_attributes(paths[(i - start) / 2]) != INVALID_FILE_ATTRIBUTES)
@@ -559,9 +552,7 @@ int wmain(int argc, wchar_t **argv) {
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 1, TRUE, 0);
         DWORD result = launch(sid, argv[2], argv[4], argc - end - 1, argv + end + 1);
-#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
         require(sandbox_remove_null_alias(argv[2]), L"remove private import alias");
-#endif
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 2, TRUE, 0);
         check_hr(DeleteAppContainerProfile(argv[2]), L"delete AppContainer profile");

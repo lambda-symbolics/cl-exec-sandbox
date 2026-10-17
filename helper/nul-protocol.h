@@ -1,6 +1,9 @@
-/* Private x64 diagnostic protocol. No filesystem path is accepted from a client. */
+/* Fixed-width Windows client/broker protocol. No client filesystem path RPC. */
 #ifndef CL_EXEC_SANDBOX_NULL_PROTOCOL_H
 #define CL_EXEC_SANDBOX_NULL_PROTOCOL_H
+#include <windows.h>
+#include <winternl.h>
+#include <stddef.h>
 #include <stdint.h>
 
 static const uint32_t broker_magic = 0x4e554c42;
@@ -15,6 +18,7 @@ struct broker_request {
     uint32_t has_allocation, flags;
     int64_t allocation;
     uint64_t handle;
+    /* Windows real handles are interoperable 32-bit values, zero-extended. */
     uint32_t qos_present, qos_length, qos_impersonation, qos_flags;
 };
 struct broker_response {
@@ -30,4 +34,11 @@ struct broker_payload {
 };
 static_assert(sizeof(broker_request) == 80, "Stable request layout");
 static_assert(sizeof(broker_response) == 40, "Stable response layout");
+static_assert(sizeof(wchar_t) == 2 && sizeof(NTSTATUS) == 4, "Windows scalar widths");
+static_assert(offsetof(broker_request, allocation) == 48 && offsetof(broker_request, handle) == 56 &&
+              offsetof(broker_request, qos_present) == 64, "Stable request offsets");
+static_assert(offsetof(broker_response, handle) == 24 && offsetof(broker_response, information) == 32,
+              "Stable response offsets");
+static_assert(sizeof(broker_payload) == 33284 && offsetof(broker_payload, pipe) == 4 &&
+              offsetof(broker_payload, library) == 516, "Stable payload layout");
 #endif

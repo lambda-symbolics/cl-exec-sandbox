@@ -1,5 +1,5 @@
-/* Experimental x64 compatibility client. AppContainer enforces access policy;
- * the ordinary-user helper brokers only Null opens and owned-handle path queries. */
+/* AppContainer enforces access policy. The ordinary-user helper brokers
+ * canonical Null opens and final paths on client-owned file handles. */
 #define UNICODE
 #define _UNICODE
 #define _WIN32_WINNT 0x0A00
@@ -12,88 +12,27 @@
 #include "detours.h"
 #include "nul-protocol.h"
 
-static const GUID payload_id = {0x96c7a064, 0x183a, 0x47c3, {0xa2,0xc1,0x4d,0xf2,0x2b,0xe7,0x67,0x93}};
-
-static BOOL inject_null(HANDLE process, const broker_payload *payload, const char *dll) {
-    if (!DetourCopyPayloadToProcess(process, payload_id, payload, sizeof(*payload))) return FALSE;
-    const char *libraries[] = {dll};
-    return DetourUpdateProcessWithDll(process, libraries, 1);
-}
-
-#ifndef CL_EXEC_SANDBOX_NULL_DLL
-static BOOL prototype_dll_name(HMODULE module, char *result, size_t capacity) {
-    char option[2];
-    if (GetEnvironmentVariableA("CL_EXEC_SANDBOX_NULL_BASENAME", option, sizeof(option)) == 1 &&
-        option[0] == '1') return strcpy_s(result, capacity, "cl-exec-sandbox-null.dll") == 0;
-    wchar_t path[32768];
-    DWORD length = GetModuleFileNameW(module, path, 32768);
-    if (!length || length >= 32768) return FALSE;
-    wchar_t *leaf = wcsrchr(path, L'\\');
-    if (!leaf) { SetLastError(ERROR_BAD_PATHNAME); return FALSE; }
-    if (wcscpy_s(leaf + 1, 32768 - (size_t)(leaf + 1 - path), L"cl-exec-sandbox-null.dll")) {
-        SetLastError(ERROR_FILENAME_EXCED_RANGE);
-        return FALSE;
-    }
-    for (size_t i = 0; i < capacity; ++i) {
-        if (path[i] > 127) { SetLastError(ERROR_NO_UNICODE_TRANSLATION); return FALSE; }
-        result[i] = (char)path[i];
-        if (!path[i]) return TRUE;
-    }
-    SetLastError(ERROR_FILENAME_EXCED_RANGE);
-    return FALSE;
-}
-
-extern "C" const broker_payload *sandbox_broker_endpoint(void);
-
-/* A random logon-local DOS alias permits an ASCII import name for a Unicode
- * installation directory without depending on PATH or 8.3 name generation. */
-static BOOL alias_library(const wchar_t *profile, char *result, size_t capacity) {
-    wchar_t directory[32768];
-    DWORD length = GetModuleFileNameW(NULL, directory, 32768);
-    if (!length || length >= 32768) return FALSE;
-    wchar_t *leaf = wcsrchr(directory, L'\\');
-    if (!leaf) { SetLastError(ERROR_BAD_PATHNAME); return FALSE; }
-    *leaf = 0;
-    wchar_t existing[32768];
-    if (QueryDosDeviceW(profile, existing, 32768)) { SetLastError(ERROR_ALREADY_EXISTS); return FALSE; }
-    if (GetLastError() != ERROR_FILE_NOT_FOUND) return FALSE;
-    if (!DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, profile, directory)) return FALSE;
-    char ascii_profile[64];
-    size_t i;
-    for (i = 0; profile[i] && i + 1 < sizeof(ascii_profile); ++i) {
-        if (profile[i] > 127) { SetLastError(ERROR_NO_UNICODE_TRANSLATION); return FALSE; }
-        ascii_profile[i] = static_cast<char>(profile[i]);
-    }
-    ascii_profile[i] = 0;
-    return sprintf_s(result, capacity, "\\\\?\\%s\\cl-exec-sandbox-null.dll", ascii_profile) > 0;
-}
-
-extern "C" BOOL sandbox_remove_null_alias(const wchar_t *profile) {
-    wchar_t target[32768];
-    if (!QueryDosDeviceW(profile, target, 32768)) return GetLastError() == ERROR_FILE_NOT_FOUND;
-    return DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE |
-                            DDD_RAW_TARGET_PATH | DDD_NO_BROADCAST_SYSTEM, profile, target);
-}
-
-extern "C" BOOL sandbox_inject_null(HANDLE process, const wchar_t *profile) {
-    broker_payload payload = *sandbox_broker_endpoint();
-    char option[2];
-    BOOL alias = GetEnvironmentVariableA("CL_EXEC_SANDBOX_NULL_ALIAS", option, sizeof(option)) == 1 && option[0] == '1';
-    if (alias) {
-        if (!alias_library(profile, payload.library, sizeof(payload.library))) return FALSE;
-    } else if (!prototype_dll_name(NULL, payload.library, sizeof(payload.library))) return FALSE;
-    return inject_null(process, &payload, payload.library);
-}
-#else
+#include "windows-inject.h"
 static broker_payload endpoint;
-static char dll_path[32768];
 static decltype(&NtCreateFile) real_create_file = NtCreateFile;
 typedef NTSTATUS (NTAPI *open_file_type)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
                                         PIO_STATUS_BLOCK, ULONG, ULONG);
 static open_file_type real_open_file;
 static decltype(&CreateProcessW) real_create_process_w = CreateProcessW;
 static decltype(&CreateProcessA) real_create_process_a = CreateProcessA;
+static decltype(&CreateProcessAsUserW) real_as_user_w = CreateProcessAsUserW;
+static decltype(&CreateProcessAsUserA) real_as_user_a = CreateProcessAsUserA;
+static decltype(&CreateProcessWithTokenW) real_with_token = CreateProcessWithTokenW;
+static decltype(&CreateProcessWithLogonW) real_with_logon = CreateProcessWithLogonW;
+static thread_local unsigned creation_depth;
+
+struct process_creation_scope {
+    bool outer;
+    process_creation_scope() : outer(creation_depth++ == 0) {}
+    ~process_creation_scope() { --creation_depth; }
+};
 static decltype(&GetFinalPathNameByHandleW) real_final_path = GetFinalPathNameByHandleW;
+static decltype(&GetFinalPathNameByHandleA) real_final_path_a = GetFinalPathNameByHandleA;
 
 static bool transfer(HANDLE pipe, void *buffer, DWORD size, bool writing) {
     BYTE *cursor = static_cast<BYTE *>(buffer);
@@ -121,6 +60,7 @@ static bool transfer(HANDLE pipe, void *buffer, DWORD size, bool writing) {
 }
 
 static bool trace_failure(const char *stage, DWORD error) {
+#ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
     static LONG count;
     if (InterlockedIncrement(&count) <= 24) {
         char line[256];
@@ -128,6 +68,9 @@ static bool trace_failure(const char *stage, DWORD error) {
         DWORD written;
         if (length > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, static_cast<DWORD>(length), &written, NULL);
     }
+#else
+    (void)stage;
+#endif
     SetLastError(error);
     return false;
 }
@@ -200,6 +143,10 @@ static NTSTATUS broker_null(broker_request *request, PHANDLE file, POBJECT_ATTRI
         return static_cast<NTSTATUS>(0xc0000022L);
     }
     if (response.status < 0) trace_failure("native-null", static_cast<DWORD>(response.status));
+    if (response.handle > UINT32_MAX || response.information > UINTPTR_MAX) {
+        trace_failure("null-width", ERROR_INVALID_DATA);
+        return static_cast<NTSTATUS>(0xc0000022L);
+    }
     if (response.status >= 0) {
         *file = reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(response.handle));
         status->Status = response.io_status;
@@ -220,8 +167,9 @@ static DWORD WINAPI hook_final_path(HANDLE file, LPWSTR buffer, DWORD capacity, 
     std::vector<BYTE> output;
     if (!broker_call(&request, NULL, &response, &output)) { SetLastError(original_error); return 0; }
     if (response.error) { SetLastError(response.error); return 0; }
+    if (response.information >= 32768) { SetLastError(ERROR_INVALID_DATA); return 0; }
     size_t length = static_cast<size_t>(response.information);
-    if (length >= 32768 || output.size() != (length + 1) * sizeof(wchar_t) ||
+    if (output.size() != (length + 1) * sizeof(wchar_t) ||
         reinterpret_cast<const wchar_t *>(output.data())[length] != 0) {
         SetLastError(ERROR_INVALID_DATA);
         return 0;
@@ -229,6 +177,19 @@ static DWORD WINAPI hook_final_path(HANDLE file, LPWSTR buffer, DWORD capacity, 
     if (capacity <= length) return static_cast<DWORD>(length + 1);
     memcpy(buffer, output.data(), output.size());
     return static_cast<DWORD>(length);
+}
+
+static DWORD WINAPI hook_final_path_a(HANDLE file, LPSTR buffer, DWORD capacity, DWORD flags) {
+    DWORD result = real_final_path_a(file, buffer, capacity, flags);
+    if (result || GetLastError() != ERROR_ACCESS_DENIED) return result;
+    wchar_t path[32768];
+    if (!hook_final_path(file, path, 32768, flags)) return 0;
+    UINT page = AreFileApisANSI() ? CP_ACP : CP_OEMCP;
+    int required = WideCharToMultiByte(page, 0, path, -1, NULL, 0, NULL, NULL);
+    if (!required) return 0;
+    if (capacity < static_cast<DWORD>(required)) return static_cast<DWORD>(required);
+    if (!WideCharToMultiByte(page, 0, path, -1, buffer, required, NULL, NULL)) return 0;
+    return static_cast<DWORD>(required - 1);
 }
 
 static NTSTATUS NTAPI hook_create_file(PHANDLE file, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
@@ -268,11 +229,17 @@ static NTSTATUS NTAPI hook_open_file(PHANDLE file, ACCESS_MASK access, POBJECT_A
 
 static BOOL finish_child(BOOL created, DWORD flags, LPPROCESS_INFORMATION process) {
     if (!created) return FALSE;
-    if (!inject_null(process->hProcess, &endpoint, dll_path) ||
+    if (!sandbox_inject_process(process->hProcess, &endpoint, NULL, real_create_process_w) ||
         (!(flags & CREATE_SUSPENDED) && ResumeThread(process->hThread) == (DWORD)-1)) {
         DWORD error = GetLastError();
-        TerminateProcess(process->hProcess, 125);
-        WaitForSingleObject(process->hProcess, INFINITE);
+        if (!TerminateProcess(process->hProcess, 125)) {
+            error = GetLastError();
+        } else {
+            // The invocation Job retains ownership if bounded reaping times out.
+            DWORD waited = WaitForSingleObject(process->hProcess, broker_timeout);
+            if (waited == WAIT_TIMEOUT) error = ERROR_TIMEOUT;
+            else if (waited == WAIT_FAILED) error = GetLastError();
+        }
         CloseHandle(process->hThread);
         CloseHandle(process->hProcess);
         ZeroMemory(process, sizeof(*process));
@@ -285,30 +252,68 @@ static BOOL finish_child(BOOL created, DWORD flags, LPPROCESS_INFORMATION proces
 static BOOL WINAPI hook_create_process_w(LPCWSTR application, LPWSTR line,
     LPSECURITY_ATTRIBUTES process_security, LPSECURITY_ATTRIBUTES thread_security, BOOL inherit,
     DWORD flags, LPVOID environment, LPCWSTR cwd, LPSTARTUPINFOW startup, LPPROCESS_INFORMATION process) {
-    return finish_child(real_create_process_w(application, line, process_security, thread_security,
-        inherit, flags | CREATE_SUSPENDED, environment, cwd, startup, process), flags, process);
+    process_creation_scope scope;
+    BOOL created = real_create_process_w(application, line, process_security, thread_security,
+        inherit, scope.outer ? flags | CREATE_SUSPENDED : flags, environment, cwd, startup, process);
+    return scope.outer ? finish_child(created, flags, process) : created;
 }
 
 static BOOL WINAPI hook_create_process_a(LPCSTR application, LPSTR line,
     LPSECURITY_ATTRIBUTES process_security, LPSECURITY_ATTRIBUTES thread_security, BOOL inherit,
     DWORD flags, LPVOID environment, LPCSTR cwd, LPSTARTUPINFOA startup, LPPROCESS_INFORMATION process) {
-    return finish_child(real_create_process_a(application, line, process_security, thread_security,
-        inherit, flags | CREATE_SUSPENDED, environment, cwd, startup, process), flags, process);
+    process_creation_scope scope;
+    BOOL created = real_create_process_a(application, line, process_security, thread_security,
+        inherit, scope.outer ? flags | CREATE_SUSPENDED : flags, environment, cwd, startup, process);
+    return scope.outer ? finish_child(created, flags, process) : created;
 }
 
-extern "C" __declspec(dllexport) void null_hook_marker(void) {}
+static BOOL WINAPI hook_as_user_w(HANDLE token, LPCWSTR application, LPWSTR line,
+    LPSECURITY_ATTRIBUTES process_security, LPSECURITY_ATTRIBUTES thread_security, BOOL inherit,
+    DWORD flags, LPVOID environment, LPCWSTR cwd, LPSTARTUPINFOW startup, LPPROCESS_INFORMATION process) {
+    process_creation_scope scope;
+    BOOL created = real_as_user_w(token, application, line, process_security, thread_security,
+        inherit, scope.outer ? flags | CREATE_SUSPENDED : flags, environment, cwd, startup, process);
+    return scope.outer ? finish_child(created, flags, process) : created;
+}
+
+static BOOL WINAPI hook_as_user_a(HANDLE token, LPCSTR application, LPSTR line,
+    LPSECURITY_ATTRIBUTES process_security, LPSECURITY_ATTRIBUTES thread_security, BOOL inherit,
+    DWORD flags, LPVOID environment, LPCSTR cwd, LPSTARTUPINFOA startup, LPPROCESS_INFORMATION process) {
+    process_creation_scope scope;
+    BOOL created = real_as_user_a(token, application, line, process_security, thread_security,
+        inherit, scope.outer ? flags | CREATE_SUSPENDED : flags, environment, cwd, startup, process);
+    return scope.outer ? finish_child(created, flags, process) : created;
+}
+
+static BOOL WINAPI hook_with_token(HANDLE token, DWORD logon_flags, LPCWSTR application, LPWSTR line,
+    DWORD flags, LPVOID environment, LPCWSTR cwd, LPSTARTUPINFOW startup, LPPROCESS_INFORMATION process) {
+    process_creation_scope scope;
+    BOOL created = real_with_token(token, logon_flags, application, line,
+        scope.outer ? flags | CREATE_SUSPENDED : flags, environment, cwd, startup, process);
+    return scope.outer ? finish_child(created, flags, process) : created;
+}
+
+static BOOL WINAPI hook_with_logon(LPCWSTR user, LPCWSTR domain, LPCWSTR password, DWORD logon_flags,
+    LPCWSTR application, LPWSTR line, DWORD flags, LPVOID environment, LPCWSTR cwd,
+    LPSTARTUPINFOW startup, LPPROCESS_INFORMATION process) {
+    process_creation_scope scope;
+    BOOL created = real_with_logon(user, domain, password, logon_flags, application, line,
+        scope.outer ? flags | CREATE_SUSPENDED : flags, environment, cwd, startup, process);
+    return scope.outer ? finish_child(created, flags, process) : created;
+}
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     (void)reserved;
     (void)module;
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
+    if (DetourIsHelperProcess()) return TRUE;
     DetourRestoreAfterWith();
     DWORD bytes = 0;
-    broker_payload *payload = (broker_payload *)DetourFindPayloadEx(payload_id, &bytes);
+    broker_payload *payload = (broker_payload *)DetourFindPayloadEx(sandbox_payload_id, &bytes);
     if (!payload || bytes != sizeof(*payload)) return FALSE;
     endpoint = *payload;
     if (!memchr(endpoint.library, 0, sizeof(endpoint.library)) ||
-        strcpy_s(dll_path, sizeof(dll_path), endpoint.library)) return FALSE;
+        !wmemchr(endpoint.pipe, 0, sizeof(endpoint.pipe) / sizeof(endpoint.pipe[0]))) return FALSE;
     FARPROC open_address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile");
     static_assert(sizeof(open_address) == sizeof(real_open_file), "Native function pointer size");
     memcpy(&real_open_file, &open_address, sizeof(real_open_file));
@@ -318,9 +323,13 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     if (!error) error = DetourAttach(&real_create_file, hook_create_file);
     if (!error) error = DetourAttach(&real_open_file, hook_open_file);
     if (!error) error = DetourAttach(&real_final_path, hook_final_path);
+    if (!error) error = DetourAttach(&real_final_path_a, hook_final_path_a);
     if (!error) error = DetourAttach(&real_create_process_w, hook_create_process_w);
     if (!error) error = DetourAttach(&real_create_process_a, hook_create_process_a);
+    if (!error) error = DetourAttach(&real_as_user_w, hook_as_user_w);
+    if (!error) error = DetourAttach(&real_as_user_a, hook_as_user_a);
+    if (!error) error = DetourAttach(&real_with_token, hook_with_token);
+    if (!error) error = DetourAttach(&real_with_logon, hook_with_logon);
     if (error) { DetourTransactionAbort(); return FALSE; }
     return DetourTransactionCommit() == NO_ERROR;
 }
-#endif

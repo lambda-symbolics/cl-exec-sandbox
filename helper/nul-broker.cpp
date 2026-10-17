@@ -1,4 +1,4 @@
-/* Diagnostic compatibility broker, owned by the existing ordinary-user helper.
+/* Native compatibility broker, owned by the existing ordinary-user helper.
  * Only real Null opens and final-path queries on caller-owned handles cross it.
  * Pipe waits are cancellable; a stalled client cannot delay helper shutdown. */
 #define UNICODE
@@ -123,6 +123,7 @@ static void open_null(const broker_request &request, const std::vector<BYTE> &ex
 
 static void final_path(const broker_request &request, HANDLE client, broker_response *response,
                        std::vector<BYTE> *extra) {
+    if (request.handle > UINT32_MAX) { response->error = ERROR_INVALID_HANDLE; return; }
     HANDLE file = NULL;
     if (!DuplicateHandle(client, reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(request.handle)),
                          GetCurrentProcess(), &file, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
@@ -260,7 +261,6 @@ extern "C" BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *pr
     if (swprintf_s(endpoint.pipe, 256, L"\\\\.\\pipe\\LOCAL\\%ls-null", profile) < 0) return FALSE;
     std::wstring server_name = server_pipe_name(package, profile);
     if (server_name.empty()) return FALSE;
-    fwprintf(stderr, L"BROKER server=%ls client=%ls\n", server_name.c_str(), endpoint.pipe);
     HMODULE native = GetModuleHandleW(L"ntdll.dll");
     FARPROC address = GetProcAddress(native, "NtOpenFile");
     static_assert(sizeof(address) == sizeof(native_open), "Native pointer size");
