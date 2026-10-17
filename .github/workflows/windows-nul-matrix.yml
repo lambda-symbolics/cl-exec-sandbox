@@ -12,12 +12,27 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@v5
+        with:
+          repository: microsoft/Detours
+          ref: 1dbd4ea281d73d478aa8d09a8b83fbd265f715f7
+          path: detours-reference
+      - name: Build upstream Detours
+        shell: cmd
+        run: nmake /nologo /C /F Makefile
+        working-directory: detours-reference/src
       - name: Compile diagnostic helper and native child
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build | Out-Null
-          clang -std=c11 -O2 -Wall -Wextra -Werror -DCL_EXEC_SANDBOX_DIAGNOSTIC helper/cl-exec-sandbox-windows.c -o build/cl-exec-sandbox-windows-diagnostic.exe -ladvapi32 -luserenv -lole32
+          clang -std=c11 -O2 -Wall -Wextra -Werror -DCL_EXEC_SANDBOX_DIAGNOSTIC -DCL_EXEC_SANDBOX_NULL_PROTOTYPE -c helper/cl-exec-sandbox-windows.c -o build/helper.obj
           if ($LASTEXITCODE -ne 0) { throw 'Diagnostic helper compilation failed.' }
+          cl /nologo /MT /W4 /WX /EHsc /I detours-reference/include /c helper/nul-hook-prototype.cpp /Fobuild/inject.obj
+          if ($LASTEXITCODE -ne 0) { throw 'Injector compilation failed.' }
+          link /nologo /out:build/cl-exec-sandbox-windows-diagnostic.exe build/helper.obj build/inject.obj detours-reference/lib.X64/detours.lib advapi32.lib userenv.lib ole32.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic helper linking failed.' }
+          cl /nologo /MT /W4 /WX /EHsc /LD /DCL_EXEC_SANDBOX_NULL_DLL /I detours-reference/include helper/nul-hook-prototype.cpp /Fobuild/shim.obj /link /out:build/cl-exec-sandbox-null.dll /EXPORT:null_hook_marker,@1 detours-reference/lib.X64/detours.lib ntdll.lib
+          if ($LASTEXITCODE -ne 0) { throw 'Null shim compilation failed.' }
           clang -std=c11 -O2 -Wall -Wextra -Werror tests/windows-child.c -o build/windows-child.exe -ladvapi32 -lws2_32
           if ($LASTEXITCODE -ne 0) { throw 'Native child compilation failed.' }
       - name: Run native matrix as standard account
@@ -34,7 +49,7 @@ jobs:
             & icacls.exe $root /inheritance:r /grant:r "*$($user.SID.Value):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
             if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare the private fixture.' }
             $programs = New-Item -ItemType Directory -Path (Join-Path $root 'programs')
-            Copy-Item build/cl-exec-sandbox-windows-diagnostic.exe, build/windows-child.exe -Destination $programs.FullName
+              Copy-Item build/cl-exec-sandbox-windows-diagnostic.exe, build/windows-child.exe, build/cl-exec-sandbox-null.dll -Destination $programs.FullName
             Copy-Item scripts/probe-windows-nul.ps1 -Destination (Join-Path $root 'probe.ps1')
             $git = (Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
             $gitRoot = Split-Path (Split-Path $git -Parent) -Parent

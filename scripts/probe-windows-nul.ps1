@@ -57,7 +57,7 @@ Invoke-Checked $git @('-C', $workspace, 'config', 'user.name', 'diagnostic')
 [IO.File]::WriteAllText((Join-Path $workspace 'tracked.txt'), 'fixture')
 Invoke-Checked $git @('-C', $workspace, 'add', 'tracked.txt')
 Invoke-Checked $git @('-C', $workspace, 'commit', '--quiet', '-m', 'fixture')
-foreach ($mode in @('ordinary-user', 'restricted-only', 'appcontainer-only', 'combined')) {
+foreach ($mode in @('ordinary-user', 'restricted-only', 'appcontainer-only', 'combined', 'combined-hook')) {
     Invoke-Probe $mode 'nul-security' $child @('nul-security')
     Invoke-Probe $mode 'nul' $child @('nul')
     Invoke-Probe $mode 'nul-descendant' $child @('nul-descendant')

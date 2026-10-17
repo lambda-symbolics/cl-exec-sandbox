@@ -376,12 +376,18 @@ static HANDLE restricted_token(void) {
     return restricted;
 }
 #ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
+#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
+extern BOOL sandbox_inject_null(HANDLE process);
+#endif
 static int diagnostic_mode(void) {
     char mode[32];
     DWORD length = GetEnvironmentVariableA("CL_EXEC_SANDBOX_DIAGNOSTIC_MODE", mode, sizeof(mode));
     if (!length || length >= sizeof(mode) || !strcmp(mode, "combined")) return 0;
     if (!strcmp(mode, "restricted-only")) return 1;
     if (!strcmp(mode, "appcontainer-only")) return 2;
+#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
+    if (!strcmp(mode, "combined-hook")) return 3;
+#endif
     fail(L"unknown diagnostic token mode", ERROR_INVALID_PARAMETER);
     return 0;
 }
@@ -452,6 +458,9 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
         WaitForSingleObject(process.hProcess, INFINITE);
         fail(L"assign suspended process to job", error);
     }
+#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
+    if (mode == 3) require(sandbox_inject_null(process.hProcess), L"inject native Null prototype");
+#endif
     require(ResumeThread(process.hThread) != (DWORD)-1, L"start contained process");
     require(WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0, L"wait for command");
     DWORD status;
