@@ -101,23 +101,31 @@ try {
 } catch {
     Write-Host ($_ | Format-List * -Force | Out-String)
     Write-Host $_.ScriptStackTrace
-    exit 91
+    if ($_.FullyQualifiedErrorId -eq 'DriveNotFound' -and $_.TargetObject -eq 'Microsoft.PowerShell.Core\FileSystem') { exit 91 }
+    exit 92
 }
 '@
 $encodedPowerShellProbe = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($powerShellProbe))
 $inheritedModulePath = $env:PSModulePath
-foreach ($moduleMode in @('inherited', 'winps-first')) {
-    if ($moduleMode -eq 'winps-first') {
-        $env:PSModulePath = (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/Modules') + ';' + $inheritedModulePath
-    }
-    foreach ($locationMode in @('native', 'drive')) {
-        $env:CL_SANDBOX_PROBE_LOCATION = $locationMode
-        foreach ($mode in @('ordinary-user', 'production-sandbox')) {
-            Invoke-Probe $mode "winps-git-$moduleMode-$locationMode" $windowsPowerShell @('-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', $encodedPowerShellProbe) -Expected 0
+Push-Location -LiteralPath $workspace
+try {
+    foreach ($moduleMode in @('inherited', 'winps-first')) {
+        if ($moduleMode -eq 'winps-first') {
+            $env:PSModulePath = (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/Modules') + ';' + $inheritedModulePath
+        }
+        foreach ($locationMode in @('native', 'drive')) {
+            $env:CL_SANDBOX_PROBE_LOCATION = $locationMode
+            foreach ($mode in @('ordinary-user', 'production-sandbox')) {
+                $expected = 0
+                if ($mode -eq 'production-sandbox' -and $locationMode -eq 'native') { $expected = 91 }
+                Invoke-Probe $mode "winps-git-$moduleMode-$locationMode" $windowsPowerShell @('-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', $encodedPowerShellProbe) -Expected $expected
+            }
         }
     }
+} finally {
+    Pop-Location
+    $env:PSModulePath = $inheritedModulePath
 }
-$env:PSModulePath = $inheritedModulePath
 foreach ($mode in @('ordinary-user', 'production-sandbox')) {
     Invoke-Probe $mode 'nul-security' $child @('nul-security')
     Invoke-Probe $mode 'nul' $child @('nul') -Expected 0
