@@ -103,7 +103,7 @@ foreach ($mask in @(0, 128, 160)) {
             }
             Set-Acl -LiteralPath $root -AclObject $originalAcl
         }
-        foreach ($path in @((Split-Path $root -Parent), $root, $checkoutContainer)) {
+        foreach ($path in @('C:\', 'C:\Users', (Split-Path $root -Parent), $root, $checkoutContainer)) {
             & $helper --run $profile isolated $workspace @rules -- $child attributes $path
             Write-Host "ANCESTOR mask=$mask path=$path status=$LASTEXITCODE"
         }
@@ -116,8 +116,8 @@ foreach ($mask in @(0, 128, 160)) {
         }
     } finally {
         & $helper --cleanup $profile @rules
-        $restored = [Security.AccessControl.DirectorySecurity]::new()
-        $restored.SetSecurityDescriptorSddlForm($beforeAcl)
+        $restored = Get-Acl -LiteralPath $root
+        $restored.SetSecurityDescriptorSddlForm($beforeAcl, [Security.AccessControl.AccessControlSections]::Access)
         Set-Acl -LiteralPath $root -AclObject $restored
     }
 }
