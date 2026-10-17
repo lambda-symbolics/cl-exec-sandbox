@@ -17,6 +17,32 @@ static int write_file(const wchar_t *path) {
     CloseHandle(file);
     return (int)error;
 }
+static int probe_nul(void) {
+    HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+    if (input == INVALID_HANDLE_VALUE) return (int)GetLastError();
+    char byte;
+    DWORD count = 99;
+    BOOL ok = ReadFile(input, &byte, 1, &count, NULL);
+    DWORD error = ok && count == 0 ? ERROR_SUCCESS : (ok ? ERROR_INVALID_DATA : GetLastError());
+    CloseHandle(input);
+    if (error) return (int)error;
+    HANDLE output = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                NULL, OPEN_EXISTING, 0, NULL);
+    if (output == INVALID_HANDLE_VALUE) return (int)GetLastError();
+    count = 0;
+
+    ok = WriteFile(output, "nul", 3, &count, NULL);
+    error = ok && count == 3 ? ERROR_SUCCESS : (ok ? ERROR_INVALID_DATA : GetLastError());
+    CloseHandle(output);
+    if (error) return (int)error;
+    HANDLE both = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (both == INVALID_HANDLE_VALUE) return (int)GetLastError();
+    CloseHandle(both);
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) return 99;
     if (!wcscmp(argv[1], L"identity")) {
@@ -31,7 +57,10 @@ int wmain(int argc, wchar_t **argv) {
         for (int i = 2; i < argc; ++i) wprintf(L"[%ls]\n", argv[i]);
         return 0;
     }
+    if (!wcscmp(argv[1], L"nul")) return probe_nul();
+
     if (argc < 3) return 99;
+
     if (!wcscmp(argv[1], L"protect-acl")) {
         PSECURITY_DESCRIPTOR descriptor = NULL;
         PACL acl = NULL;

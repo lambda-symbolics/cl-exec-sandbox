@@ -75,6 +75,19 @@
                            (list workspace (merge-pathnames ".git/" workspace)
                                  metadata secret programs payload read-file)))
              (check (eq (getf (sandbox-capabilities) :backend) :appcontainer) "native backend discovered")
+             (let ((direct (run-sandboxed (uiop:native-namestring payload) (list "nul")
+                                          :policy (unrestricted-sandbox-policy)
+                                          :working-directory workspace :timeout 20))
+                   (contained (run (list "nul"))))
+               (format t "~&NUL probe direct: exit ~D~%stdout: ~A~%stderr: ~A~%"
+                       (sandbox-result-exit-code direct) (sandbox-result-output direct)
+                       (sandbox-result-error-output direct))
+               (format t "~&NUL probe AppContainer+restricted: exit ~D~%stdout: ~A~%stderr: ~A~%"
+                       (sandbox-result-exit-code contained) (sandbox-result-output contained)
+                       (sandbox-result-error-output contained))
+               (check (zerop (sandbox-result-exit-code direct)) "direct NUL probe passed")
+               (check (zerop (sandbox-result-exit-code contained)) "AppContainer NUL probe passed"))
+
 
              (let ((result (run-sandboxed (native payload) (list "identity")
                                            :policy long-policy :working-directory workspace
