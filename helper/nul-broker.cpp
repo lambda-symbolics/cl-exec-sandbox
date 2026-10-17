@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <winternl.h>
 #include <sddl.h>
+#include <securityappcontainer.h>
 #include <stdio.h>
 #include <string>
 #include <vector>
@@ -241,10 +242,22 @@ static bool make_security(PSID package) {
                                                                  &pipe_security, NULL) != FALSE;
 }
 
+/* LOCAL names are expanded inside an AppContainer, not in the desktop
+ * helper. Create the server in that exact package/session namespace. */
+static std::wstring server_pipe_name(PSID package, const wchar_t *profile) {
+    wchar_t objects[512];
+    ULONG required = 0;
+    if (!GetAppContainerNamedObjectPath(NULL, package, 512, objects, &required)) return std::wstring();
+    return L"\\\\.\\pipe" + std::wstring(objects) + L"\\" + profile + L"-null";
+}
+
 extern "C" BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *profile) {
     broker_job = job;
     endpoint.process_id = GetCurrentProcessId();
     if (swprintf_s(endpoint.pipe, 256, L"\\\\.\\pipe\\LOCAL\\%ls-null", profile) < 0) return FALSE;
+    std::wstring server_name = server_pipe_name(package, profile);
+    if (server_name.empty()) return FALSE;
+    fwprintf(stderr, L"BROKER server=%ls client=%ls\n", server_name.c_str(), endpoint.pipe);
     HMODULE native = GetModuleHandleW(L"ntdll.dll");
     FARPROC address = GetProcAddress(native, "NtOpenFile");
     static_assert(sizeof(address) == sizeof(native_open), "Native pointer size");
@@ -256,7 +269,7 @@ extern "C" BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *pr
     for (unsigned i = 0; i < worker_count; ++i) {
         DWORD mode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED;
         if (i == 0) mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
-        pipes[i] = CreateNamedPipeW(endpoint.pipe, mode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE |
+        pipes[i] = CreateNamedPipeW(server_name.c_str(), mode, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE |
                                     PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, worker_count,
                                     broker_max_extra, broker_max_extra, 0, &security);
         if (pipes[i] == INVALID_HANDLE_VALUE) {

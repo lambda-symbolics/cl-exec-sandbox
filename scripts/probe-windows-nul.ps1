@@ -74,7 +74,7 @@ foreach ($mode in @('ordinary-user', 'restricted-only', 'appcontainer-only', 'co
     Invoke-Probe $mode 'git-rev-parse' $git @('-C', $workspace, 'rev-parse', '--show-toplevel') -Expected $expected
 }
 foreach ($mode in @('ordinary-user', 'combined-hook')) {
-    Invoke-Probe $mode 'nul-semantics' $child @('nul-semantics')
+    Invoke-Probe $mode 'nul-semantics' $child @('nul-semantics') -Expected 0
     Invoke-Probe $mode 'final-path-semantics' $child @('final-path-semantics') -Expected 0
 }
 $outside = Join-Path $root 'outside'

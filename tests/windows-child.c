@@ -173,30 +173,28 @@ static NTSTATUS native_open(const wchar_t *name, ACCESS_MASK access, ULONG share
 }
 
 static int native_async_read(HANDLE file, const wchar_t *label) {
-    OVERLAPPED overlapped;
+    OVERLAPPED overlapped = {0};
     char byte = 0;
-    DWORD count = 77, error;
-    ZeroMemory(&overlapped, sizeof(overlapped));
+    DWORD count = 0, error = ERROR_SUCCESS;
     overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!overlapped.hEvent) return (int)GetLastError();
     BOOL immediate = ReadFile(file, &byte, 1, &count, &overlapped);
     if (!immediate) {
         error = GetLastError();
-        if (error != ERROR_IO_PENDING) {
-            wprintf(L"NUL semantics async label=%ls error=%lu\n", label, error);
-            CloseHandle(overlapped.hEvent);
-            return (int)error;
-        }
-        if (!GetOverlappedResult(file, &overlapped, &count, TRUE)) {
-            error = GetLastError();
-            CloseHandle(overlapped.hEvent);
-            return (int)error;
+        if (error == ERROR_IO_PENDING) {
+            if (WaitForSingleObject(overlapped.hEvent, 2000) != WAIT_OBJECT_0) {
+                CancelIoEx(file, &overlapped);
+                GetOverlappedResult(file, &overlapped, &count, TRUE);
+                CloseHandle(overlapped.hEvent);
+                return ERROR_TIMEOUT;
+            }
+            error = GetOverlappedResult(file, &overlapped, &count, FALSE) ? ERROR_SUCCESS : GetLastError();
         }
     }
-    wprintf(L"NUL semantics async label=%ls immediate=%d bytes=%lu\n", label,
-            immediate ? 1 : 0, count);
+    wprintf(L"NUL semantics async label=%ls immediate=%d bytes=%lu error=%lu\n", label,
+            immediate ? 1 : 0, count, error);
     CloseHandle(overlapped.hEvent);
-    return count == 0 ? 0 : ERROR_INVALID_DATA;
+    return (error == ERROR_SUCCESS || error == ERROR_HANDLE_EOF) && count == 0 ? 0 : ERROR_INVALID_DATA;
 }
 
 static void native_matrix_open(const wchar_t *label, ACCESS_MASK access, ULONG share,
@@ -209,37 +207,29 @@ static void native_matrix_open(const wchar_t *label, ACCESS_MASK access, ULONG s
     if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
 }
 
-static int native_iocp_read(HANDLE file, ULONG_PTR key, const wchar_t *label) {
+static int native_iocp_write(HANDLE file, ULONG_PTR key, const wchar_t *label) {
     HANDLE port = CreateIoCompletionPort(file, NULL, key, 1);
-    OVERLAPPED overlapped;
+    OVERLAPPED overlapped = {0};
     char byte = 0;
-    DWORD bytes = 77, error;
+    DWORD bytes = 0, error = ERROR_SUCCESS;
     ULONG_PTR completion_key = 0;
     LPOVERLAPPED completed = NULL;
-    BOOL immediate;
     if (!port) return (int)GetLastError();
-    ZeroMemory(&overlapped, sizeof(overlapped));
-    immediate = ReadFile(file, &byte, 1, &bytes, &overlapped);
-    if (!immediate) {
+    overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!overlapped.hEvent) { error = GetLastError(); CloseHandle(port); return (int)error; }
+    BOOL immediate = WriteFile(file, &byte, 1, &bytes, &overlapped);
+    if (!immediate && GetLastError() != ERROR_IO_PENDING) error = GetLastError();
+    if (!error && !GetQueuedCompletionStatus(port, &bytes, &completion_key, &completed, 2000)) {
         error = GetLastError();
-        if (error != ERROR_IO_PENDING) {
-            CloseHandle(port);
-            return (int)error;
-        }
-        if (!GetQueuedCompletionStatus(port, &bytes, &completion_key, &completed, 2000)) {
-            error = GetLastError();
-            CloseHandle(port);
-            return (int)error;
-        }
-        if (completed != &overlapped || completion_key != key) {
-            CloseHandle(port);
-            return ERROR_INVALID_DATA;
-        }
+        CancelIoEx(file, &overlapped);
+        GetOverlappedResult(file, &overlapped, &bytes, TRUE);
     }
-    wprintf(L"NUL semantics iocp label=%ls key=%llu immediate=%d bytes=%lu\n",
-            label, (unsigned long long)key, immediate ? 1 : 0, bytes);
+    wprintf(L"NUL semantics iocp label=%ls key=%llu actual-key=%llu immediate=%d bytes=%lu error=%lu\n",
+            label, (unsigned long long)key, (unsigned long long)completion_key, immediate ? 1 : 0, bytes, error);
+    CloseHandle(overlapped.hEvent);
     CloseHandle(port);
-    return bytes == 0 ? 0 : ERROR_INVALID_DATA;
+    if (error) return (int)error;
+    return bytes == 1 && completed == &overlapped && completion_key == key ? 0 : ERROR_INVALID_DATA;
 }
 
 static int probe_nul_semantics(void) {
@@ -252,9 +242,9 @@ static int probe_nul_semantics(void) {
     int result = 0;
     native_matrix_open(L"read-open", GENERIC_READ, share, FILE_OPEN, options);
     native_matrix_open(L"write-open-if", GENERIC_WRITE, share, FILE_OPEN_IF, options);
-    native_matrix_open(L"read-write-sync", access, share, FILE_OPEN, options | FILE_SYNCHRONOUS_IO_NONALERT);
+    native_matrix_open(L"read-write-sync", access | SYNCHRONIZE, share, FILE_OPEN, options | FILE_SYNCHRONOUS_IO_NONALERT);
     native_matrix_open(L"exclusive-share", access, 0, FILE_OPEN, options);
-    status = native_open(L"\\Device\\Null", access, share, FILE_OPEN,
+    status = native_open(L"\\Device\\Null", access | SYNCHRONIZE, share, FILE_OPEN,
                          options | FILE_SYNCHRONOUS_IO_NONALERT, &synchronous, 0);
     wprintf(L"NUL semantics NtCreateFile synchronous status=0x%08lx\n", (ULONG)status);
     if (status < 0) result = 1;
@@ -273,8 +263,8 @@ static int probe_nul_semantics(void) {
     } else wprintf(L"NUL semantics fresh-handles=independent\n");
     if (asynchronous != INVALID_HANDLE_VALUE && native_async_read(asynchronous, L"first")) result = 1;
     if (opened != INVALID_HANDLE_VALUE && native_async_read(opened, L"second")) result = 1;
-    if (asynchronous != INVALID_HANDLE_VALUE && native_iocp_read(asynchronous, 0xA5, L"first")) result = 1;
-    if (opened != INVALID_HANDLE_VALUE && native_iocp_read(opened, 0x5A, L"second")) result = 1;
+    if (asynchronous != INVALID_HANDLE_VALUE && native_iocp_write(asynchronous, 0xA5, L"first")) result = 1;
+    if (opened != INVALID_HANDLE_VALUE && native_iocp_write(opened, 0x5A, L"second")) result = 1;
     if (synchronous != INVALID_HANDLE_VALUE) {
         IO_STATUS_BLOCK_NATIVE io;
         FARPROC query_address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile");
