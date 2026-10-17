@@ -82,7 +82,14 @@ try {
     Get-PSProvider | ForEach-Object { Write-Host ('PROVIDER ' + $_.Name + ' ' + $_.ImplementingType.Assembly.Location) }
     Get-PSDrive | ForEach-Object { Write-Host ('DRIVE ' + $_.Name + ' ' + $_.Root) }
     Write-Host ('BEFORE path=' + (Get-Location).Path + ' provider=' + (Get-Location).ProviderPath + ' cwd=' + [Environment]::CurrentDirectory)
-    Set-Location -LiteralPath $env:CL_SANDBOX_PROBE_WORKSPACE
+    switch ($env:CL_SANDBOX_PROBE_LOCATION) {
+        'native' { }
+        'drive' {
+            New-PSDrive -Name AutolithWorkspace -PSProvider FileSystem -Root $env:CL_SANDBOX_PROBE_WORKSPACE | Out-Null
+            Set-Location -LiteralPath 'AutolithWorkspace:\'
+        }
+        default { Set-Location -LiteralPath $env:CL_SANDBOX_PROBE_WORKSPACE }
+    }
     Write-Host ('AFTER path=' + (Get-Location).Path + ' provider=' + (Get-Location).ProviderPath + ' cwd=' + [Environment]::CurrentDirectory)
     & $env:CL_SANDBOX_PROBE_GIT status --porcelain
     if ($LASTEXITCODE -ne 0) { throw "status=$LASTEXITCODE" }
@@ -103,8 +110,11 @@ foreach ($moduleMode in @('inherited', 'winps-first')) {
     if ($moduleMode -eq 'winps-first') {
         $env:PSModulePath = (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/Modules') + ';' + $inheritedModulePath
     }
-    foreach ($mode in @('ordinary-user', 'production-sandbox')) {
-        Invoke-Probe $mode "winps-git-$moduleMode" $windowsPowerShell @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedPowerShellProbe) -Expected 0
+    foreach ($locationMode in @('native', 'drive')) {
+        $env:CL_SANDBOX_PROBE_LOCATION = $locationMode
+        foreach ($mode in @('ordinary-user', 'production-sandbox')) {
+            Invoke-Probe $mode "winps-git-$moduleMode-$locationMode" $windowsPowerShell @('-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', $encodedPowerShellProbe) -Expected 0
+        }
     }
 }
 $env:PSModulePath = $inheritedModulePath
