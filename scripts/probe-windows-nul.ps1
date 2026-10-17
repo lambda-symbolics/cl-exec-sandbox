@@ -105,7 +105,8 @@ foreach ($payload in @($child, $childX86)) {
             if ($LASTEXITCODE -ne 0) { throw 'Ordinary ancestor attribute control failed.' }
             $contained = @(Invoke-AncestorCommand "$operation/$path" $payload @($operation, $path) $attributeRules)
             if (($baseline -join "`n") -cne ($contained -join "`n")) {
-                throw "Ancestor $operation did not return real host metadata for $path"
+                Write-Host "ATTRIBUTE-MISMATCH payload=$payload baseline=$($baseline -join '|') contained=$($contained -join '|')"
+                $unexpected.Add("Ancestor $operation did not return real host metadata for $path")
             }
         }
     }
