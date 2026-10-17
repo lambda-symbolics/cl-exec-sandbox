@@ -17,31 +17,72 @@ static int write_file(const wchar_t *path) {
     CloseHandle(file);
     return (int)error;
 }
-static int probe_nul(void) {
-    HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_EXISTING, 0, NULL);
-    if (input == INVALID_HANDLE_VALUE) return (int)GetLastError();
-    char byte;
-    DWORD count = 99;
-    BOOL ok = ReadFile(input, &byte, 1, &count, NULL);
-    DWORD error = ok && count == 0 ? ERROR_SUCCESS : (ok ? ERROR_INVALID_DATA : GetLastError());
-    CloseHandle(input);
-    if (error) return (int)error;
-    HANDLE output = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                NULL, OPEN_EXISTING, 0, NULL);
-    if (output == INVALID_HANDLE_VALUE) return (int)GetLastError();
-    count = 0;
-
-    ok = WriteFile(output, "nul", 3, &count, NULL);
-    error = ok && count == 3 ? ERROR_SUCCESS : (ok ? ERROR_INVALID_DATA : GetLastError());
-    CloseHandle(output);
-    if (error) return (int)error;
-    HANDLE both = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    if (both == INVALID_HANDLE_VALUE) return (int)GetLastError();
-    CloseHandle(both);
-    return 0;
+static int probe_nul_path(const wchar_t *path) {
+    int status = 0, error;
+    HANDLE handle = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 NULL, OPEN_EXISTING, 0, NULL);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = (int)GetLastError();
+        wprintf(L"NUL path=%ls access=read open-error=%d\n", path, error);
+        status = error;
+    } else {
+        char byte; DWORD count = 99;
+        BOOL ok = ReadFile(handle, &byte, 1, &count, NULL);
+        error = ok && count == 0 ? 0 : (ok ? ERROR_INVALID_DATA : (int)GetLastError());
+        wprintf(L"NUL path=%ls access=read result=%d bytes=%lu\n", path, error, count);
+        if (error && !status) status = error;
+        CloseHandle(handle);
+    }
+    handle = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                         NULL, OPEN_EXISTING, 0, NULL);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = (int)GetLastError();
+        wprintf(L"NUL path=%ls access=write open-error=%d\n", path, error);
+        if (!status) status = error;
+    } else {
+        DWORD count = 0; BOOL ok = WriteFile(handle, "nul", 3, &count, NULL);
+        error = ok && count == 3 ? 0 : (ok ? ERROR_INVALID_DATA : (int)GetLastError());
+        wprintf(L"NUL path=%ls access=write result=%d bytes=%lu\n", path, error, count);
+        if (error && !status) status = error;
+        CloseHandle(handle);
+    }
+    handle = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = (int)GetLastError();
+        wprintf(L"NUL path=%ls access=read-write open-error=%d\n", path, error);
+        if (!status) status = error;
+    } else {
+        CloseHandle(handle);
+        wprintf(L"NUL path=%ls access=read-write result=0\n", path);
+    }
+    return status;
 }
+
+static int probe_nul(void) {
+    static const wchar_t *paths[] = {L"NUL", L"\\\\.\\NUL", L"\\\\?\\GLOBALROOT\\Device\\Null"};
+    int status = 0;
+    for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+        int result = probe_nul_path(paths[i]);
+        if (result && !status) status = result;
+    }
+    return status;
+}
+static int probe_nul_descendant(void) {
+    wchar_t executable[32768], line[32768];
+    if (!GetModuleFileNameW(NULL, executable, sizeof(executable) / sizeof(*executable))) return 99;
+    if (swprintf(line, sizeof(line) / sizeof(*line), L"\"%ls\" nul", executable) < 0) return 99;
+    STARTUPINFOW startup = {sizeof(startup)}; PROCESS_INFORMATION process = {0};
+    if (!CreateProcessW(executable, line, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                        NULL, NULL, &startup, &process)) return (int)GetLastError();
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD status = 99;
+    GetExitCodeProcess(process.hProcess, &status);
+    CloseHandle(process.hThread); CloseHandle(process.hProcess);
+    wprintf(L"NUL descendant exit=%lu\n", status);
+    return (int)status;
+}
+
 
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) return 99;
@@ -58,6 +99,7 @@ int wmain(int argc, wchar_t **argv) {
         return 0;
     }
     if (!wcscmp(argv[1], L"nul")) return probe_nul();
+    if (!wcscmp(argv[1], L"nul-descendant")) return probe_nul_descendant();
 
     if (argc < 3) return 99;
 
@@ -87,7 +129,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (!wcscmp(argv[1], L"write-delete")) {
         int error = write_file(argv[2]);
-        if (error) return error;
+        if (error && !status) status = error;
         return DeleteFileW(argv[2]) ? 0 : (int)GetLastError();
     }
     if (!wcscmp(argv[1], L"change-acl")) {

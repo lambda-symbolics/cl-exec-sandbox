@@ -1,0 +1,36 @@
+name: Windows NUL sandbox diagnostics
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  matrix:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile diagnostic helper and native child
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          clang -std=c11 -O2 -Wall -Wextra -Werror -DCL_EXEC_SANDBOX_DIAGNOSTIC helper/cl-exec-sandbox-windows.c -o build/cl-exec-sandbox-windows-diagnostic.exe -ladvapi32 -luserenv -lole32
+          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic helper compilation failed.' }
+          clang -std=c11 -O2 -Wall -Wextra -Werror tests/windows-child.c -o build/windows-child.exe -ladvapi32 -lws2_32
+          if ($LASTEXITCODE -ne 0) { throw 'Native child compilation failed.' }
+      - name: Run native matrix as standard account
+        shell: pwsh
+        run: |
+          $name = "ClSandboxNul$PID"
+          $password = ConvertTo-SecureString (([Guid]::NewGuid().ToString('N')) + '!aA1') -AsPlainText -Force
+          $user = New-LocalUser -Name $name -Password $password -AccountNeverExpires
+          try {
+            $script = Join-Path $env:RUNNER_TEMP 'probe.ps1'
+            $script = (Resolve-Path scripts/probe-windows-nul.ps1).Path
+            $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$name", $password)
+            $p = Start-Process pwsh.exe -Credential $credential -LoadUserProfile -PassThru -Wait -ArgumentList @('-NoProfile','-File',"`"$script`"")
+            if ($p.ExitCode -ne 0) { throw "NUL matrix failed: $($p.ExitCode)" }
+          } finally {
+            Get-CimInstance Win32_UserProfile | Where-Object SID -eq $user.SID.Value | Remove-CimInstance -ErrorAction SilentlyContinue
+            Remove-LocalUser -Name $name -ErrorAction SilentlyContinue
+          }

@@ -374,6 +374,23 @@ static HANDLE restricted_token(void) {
     free(sids); free(user); free(groups);
     return restricted;
 }
+#ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
+static HANDLE caller_token(void) {
+    HANDLE caller;
+    require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE |
+                             TOKEN_ASSIGN_PRIMARY, &caller), L"open caller token");
+    return caller;
+}
+static int diagnostic_mode(void) {
+    char mode[32];
+    DWORD length = GetEnvironmentVariableA("CL_EXEC_SANDBOX_DIAGNOSTIC_MODE", mode, sizeof(mode));
+    if (!length || length >= sizeof(mode) || !strcmp(mode, "combined")) return 0;
+    if (!strcmp(mode, "restricted-only")) return 1;
+    if (!strcmp(mode, "appcontainer-only")) return 2;
+    fail(L"unknown diagnostic token mode", ERROR_INVALID_PARAMETER);
+    return 0;
+}
+#endif
 static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
                     int count, wchar_t **arguments) {
     wchar_t *job_name = join(L"Local", profile);
@@ -399,19 +416,32 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     startup.StartupInfo.hStdOutput = handles[1];
     startup.StartupInfo.hStdError = handles[2];
     SIZE_T bytes = 0;
-    InitializeProcThreadAttributeList(NULL, 2, 0, &bytes);
+    #ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
+    int mode = diagnostic_mode();
+    DWORD attribute_count = mode == 1 ? 1 : 2;
+#else
+    DWORD attribute_count = 2;
+#endif
+    InitializeProcThreadAttributeList(NULL, attribute_count, 0, &bytes);
     startup.lpAttributeList = allocate(bytes);
-    require(InitializeProcThreadAttributeList(startup.lpAttributeList, 2, 0, &bytes), L"initialize process attributes");
+    require(InitializeProcThreadAttributeList(startup.lpAttributeList, attribute_count, 0, &bytes), L"initialize process attributes");
     SECURITY_CAPABILITIES capabilities;
     ZeroMemory(&capabilities, sizeof(capabilities));
     capabilities.AppContainerSid = sid;
-    require(UpdateProcThreadAttribute(startup.lpAttributeList, 0,
-                                      PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-                                      &capabilities, sizeof(capabilities), NULL, NULL), L"set AppContainer identity");
+#ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
+    if (mode != 1)
+#endif
+        require(UpdateProcThreadAttribute(startup.lpAttributeList, 0,
+                                          PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                          &capabilities, sizeof(capabilities), NULL, NULL), L"set AppContainer identity");
     require(UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                       handles, sizeof(handles), NULL, NULL), L"restrict inherited handles");
     wchar_t *line = command_line(count, arguments);
-    HANDLE token = restricted_token();
+    HANDLE token =
+#ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
+        mode == 2 ? caller_token() :
+#endif
+        restricted_token();
     require(CreateProcessAsUserW(token, arguments[0], line, NULL, NULL, TRUE,
                                 EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
                                 NULL, cwd, &startup.StartupInfo, &process), L"create AppContainer process");
