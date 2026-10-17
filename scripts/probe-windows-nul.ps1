@@ -64,11 +64,16 @@ Invoke-Checked $git @('-C', $workspace, 'add', 'tracked.txt')
 Invoke-Checked $git @('-C', $workspace, 'commit', '--quiet', '-m', 'fixture')
 foreach ($mode in @('ordinary-user', 'restricted-only', 'appcontainer-only', 'combined', 'combined-hook')) {
     Invoke-Probe $mode 'nul-security' $child @('nul-security')
-    Invoke-Probe $mode 'nul' $child @('nul')
-    Invoke-Probe $mode 'nul-descendant' $child @('nul-descendant')
+    $expected = if ($mode -in @('ordinary-user', 'restricted-only', 'combined-hook')) { 0 } else { -1 }
+    Invoke-Probe $mode 'nul' $child @('nul') -Expected $expected
+    Invoke-Probe $mode 'nul-descendant' $child @('nul-descendant') -Expected $expected
     Invoke-Probe $mode 'cwd' $child @('cwd')
-    Invoke-Probe $mode 'git-status' $git @('-C', $workspace, 'status', '--porcelain')
-    Invoke-Probe $mode 'git-rev-parse' $git @('-C', $workspace, 'rev-parse', '--show-toplevel')
+    Invoke-Probe $mode 'git-status' $git @('-C', $workspace, 'status', '--porcelain') -Expected $expected
+    Invoke-Probe $mode 'git-rev-parse' $git @('-C', $workspace, 'rev-parse', '--show-toplevel') -Expected $expected
+}
+foreach ($mode in @('ordinary-user', 'combined-hook')) {
+    Invoke-Probe $mode 'nul-semantics' $child @('nul-semantics')
+    Invoke-Probe $mode 'final-path-semantics' $child @('final-path-semantics') -Expected 0
 }
 $outside = Join-Path $root 'outside'
 New-Item -ItemType Directory -Path $outside | Out-Null

@@ -146,8 +146,12 @@ static NTSTATUS native_open(const wchar_t *name, ACCESS_MASK access, ULONG share
                             ULONG disposition, ULONG options, HANDLE *result,
                             int use_open) {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    nt_create_file_function create_file = (nt_create_file_function)GetProcAddress(ntdll, "NtCreateFile");
-    nt_open_file_function open_file = (nt_open_file_function)GetProcAddress(ntdll, "NtOpenFile");
+    FARPROC create_address = GetProcAddress(ntdll, "NtCreateFile");
+    FARPROC open_address = GetProcAddress(ntdll, "NtOpenFile");
+    nt_create_file_function create_file;
+    nt_open_file_function open_file;
+    memcpy(&create_file, &create_address, sizeof(create_file));
+    memcpy(&open_file, &open_address, sizeof(open_file));
     UNICODE_STRING_NATIVE unicode;
     OBJECT_ATTRIBUTES_NATIVE attributes;
     IO_STATUS_BLOCK_NATIVE io;
@@ -267,8 +271,9 @@ static int probe_nul_semantics(void) {
     if (opened != INVALID_HANDLE_VALUE && native_iocp_read(opened, 0x5A, L"second")) result = 1;
     if (synchronous != INVALID_HANDLE_VALUE) {
         IO_STATUS_BLOCK_NATIVE io;
-        nt_query_information_file_function query =
-            (nt_query_information_file_function)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile");
+        FARPROC query_address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile");
+        nt_query_information_file_function query;
+        memcpy(&query, &query_address, sizeof(query));
         ULONG mode = 0;
         ZeroMemory(&io, sizeof(io));
         if (!query || query(synchronous, &io, &mode, sizeof(mode), 16) < 0 ||
@@ -284,12 +289,12 @@ static int probe_nul_semantics(void) {
 }
 
 static int probe_final_path_semantics(void) {
-    wchar_t temp_path[MAX_PATH], path[MAX_PATH], output[2];
+    wchar_t cwd[32768], path[32768], output[2];
     HANDLE file;
     DWORD length, error;
     int result = 0;
-    if (!GetTempPathW(MAX_PATH, temp_path)) return (int)GetLastError();
-    if (swprintf(path, MAX_PATH, L"%lsautolith-final-path-%lu.tmp", temp_path,
+    if (!GetCurrentDirectoryW(32768, cwd)) return (int)GetLastError();
+    if (swprintf(path, 32768, L"%ls\\autolith-final-path-%lu.tmp", cwd,
                  GetCurrentProcessId()) < 0) return ERROR_INSUFFICIENT_BUFFER;
     file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -304,13 +309,15 @@ static int probe_final_path_semantics(void) {
                            VOLUME_NAME_DOS | FILE_NAME_OPENED,
                            VOLUME_NAME_NT | FILE_NAME_OPENED};
     for (unsigned i = 0; i < sizeof(flags) / sizeof(flags[0]); ++i) {
-        wchar_t *buffer = (wchar_t *)HeapAlloc(GetProcessHeap(), 0,
-                                               (length + 2) * sizeof(wchar_t));
+        DWORD required = GetFinalPathNameByHandleW(file, NULL, 0, flags[i]);
+        if (!required) { result = 1; continue; }
+        wchar_t *buffer = (wchar_t *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                               required * sizeof(wchar_t));
         DWORD actual;
         if (!buffer) { result = ERROR_NOT_ENOUGH_MEMORY; break; }
-        actual = GetFinalPathNameByHandleW(file, buffer, length + 2, flags[i]);
+        actual = GetFinalPathNameByHandleW(file, buffer, required, flags[i]);
         wprintf(L"FINAL path flags=%lu result=%lu text=%ls\n", flags[i], actual, buffer);
-        if (!actual) result = 1;
+        if (!actual || actual >= required || actual + 1 != required) result = 1;
         HeapFree(GetProcessHeap(), 0, buffer);
     }
     SetLastError(0);

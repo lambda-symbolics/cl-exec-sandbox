@@ -1,5 +1,5 @@
-/* Experimental x64 compatibility hook. AppContainer enforces all access policy.
- * Compare absolute ASCII imports with ASCII basename imports via a Unicode PATH. */
+/* Experimental x64 compatibility client. AppContainer enforces access policy;
+ * the ordinary-user helper brokers only Null opens and owned-handle path queries. */
 #define UNICODE
 #define _UNICODE
 #define _WIN32_WINNT 0x0A00
@@ -7,18 +7,14 @@
 #include <winternl.h>
 #include <wchar.h>
 #include <string.h>
-#include <stdio.h>
+#include <vector>
 #include "detours.h"
+#include "nul-protocol.h"
 
 static const GUID payload_id = {0x96c7a064, 0x183a, 0x47c3, {0xa2,0xc1,0x4d,0xf2,0x2b,0xe7,0x67,0x93}};
-struct null_payload { HANDLE handle; };
 
-/* Duplicate explicitly, including when the target did not inherit handles. */
-static BOOL inject_null(HANDLE process, HANDLE source, const char *dll) {
-    null_payload payload = {};
-    if (!DuplicateHandle(GetCurrentProcess(), source, process, &payload.handle,
-                         0, FALSE, DUPLICATE_SAME_ACCESS)) return FALSE;
-    if (!DetourCopyPayloadToProcess(process, payload_id, &payload, sizeof(payload))) return FALSE;
+static BOOL inject_null(HANDLE process, const broker_payload *payload, const char *dll) {
+    if (!DetourCopyPayloadToProcess(process, payload_id, payload, sizeof(*payload))) return FALSE;
     const char *libraries[] = {dll};
     return DetourUpdateProcessWithDll(process, libraries, 1);
 }
@@ -46,20 +42,14 @@ static BOOL prototype_dll_name(HMODULE module, char *result, size_t capacity) {
 }
 
 #ifndef CL_EXEC_SANDBOX_NULL_DLL
+extern "C" const broker_payload *sandbox_broker_endpoint(void);
 extern "C" BOOL sandbox_inject_null(HANDLE process) {
     char ascii[32768];
     if (!prototype_dll_name(NULL, ascii, sizeof(ascii))) return FALSE;
-    HANDLE source = CreateFileW(L"\\\\?\\GLOBALROOT\\Device\\Null", GENERIC_READ | GENERIC_WRITE,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    if (source == INVALID_HANDLE_VALUE) return FALSE;
-    BOOL result = inject_null(process, source, ascii);
-    DWORD error = GetLastError();
-    CloseHandle(source);
-    SetLastError(error);
-    return result;
+    return inject_null(process, sandbox_broker_endpoint(), ascii);
 }
 #else
-static HANDLE null_handle;
+static broker_payload endpoint;
 static char dll_path[32768];
 static decltype(&NtCreateFile) real_create_file = NtCreateFile;
 typedef NTSTATUS (NTAPI *open_file_type)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
@@ -67,6 +57,64 @@ typedef NTSTATUS (NTAPI *open_file_type)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTE
 static open_file_type real_open_file;
 static decltype(&CreateProcessW) real_create_process_w = CreateProcessW;
 static decltype(&CreateProcessA) real_create_process_a = CreateProcessA;
+static decltype(&GetFinalPathNameByHandleW) real_final_path = GetFinalPathNameByHandleW;
+
+static bool transfer(HANDLE pipe, void *buffer, DWORD size, bool writing) {
+    BYTE *cursor = static_cast<BYTE *>(buffer);
+    OVERLAPPED operation = {};
+    operation.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!operation.hEvent) return false;
+    bool ok = true;
+    while (size && ok) {
+        ResetEvent(operation.hEvent);
+        DWORD bytes = 0;
+        BOOL started = writing ? WriteFile(pipe, cursor, size, NULL, &operation)
+                               : ReadFile(pipe, cursor, size, NULL, &operation);
+        if (!started && GetLastError() != ERROR_IO_PENDING) { ok = false; break; }
+        if (!started && WaitForSingleObject(operation.hEvent, broker_timeout) != WAIT_OBJECT_0) {
+            CancelIoEx(pipe, &operation);
+            GetOverlappedResult(pipe, &operation, &bytes, TRUE);
+            ok = false;
+            break;
+        }
+        ok = GetOverlappedResult(pipe, &operation, &bytes, FALSE) && bytes != 0;
+        if (ok) { cursor += bytes; size -= bytes; }
+    }
+    CloseHandle(operation.hEvent);
+    return ok;
+}
+
+static bool broker_call(broker_request *request, const void *extra, broker_response *response,
+                        std::vector<BYTE> *output) {
+    request->magic = broker_magic;
+    request->version = broker_version;
+    HANDLE pipe = INVALID_HANDLE_VALUE;
+    ULONGLONG deadline = GetTickCount64() + broker_timeout;
+    do {
+        pipe = CreateFileW(endpoint.pipe, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                           FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+        if (pipe != INVALID_HANDLE_VALUE) break;
+        if (GetLastError() != ERROR_PIPE_BUSY) return false;
+        WaitNamedPipeW(endpoint.pipe, 100);
+    } while (GetTickCount64() < deadline);
+    if (pipe == INVALID_HANDLE_VALUE) return false;
+    ULONG server = 0;
+    bool ok = GetNamedPipeServerProcessId(pipe, &server) && server == endpoint.process_id;
+    if (ok) ok = transfer(pipe, request, sizeof(*request), true) &&
+                 (!request->extra_size || transfer(pipe, const_cast<void *>(extra), request->extra_size, true)) &&
+                 transfer(pipe, response, sizeof(*response), false);
+    if (ok) ok = response->magic == broker_magic && response->version == broker_version &&
+                 response->extra_size <= broker_max_extra;
+    if (ok) {
+        output->resize(response->extra_size);
+        ok = output->empty() || transfer(pipe, output->data(), response->extra_size, false);
+    }
+    BYTE acknowledged = 1;
+    if (ok) ok = transfer(pipe, &acknowledged, 1, true);
+    CloseHandle(pipe);
+    return ok;
+}
+
 
 static BOOL null_name(POBJECT_ATTRIBUTES attributes) {
     if (!attributes || attributes->RootDirectory || !attributes->ObjectName) return FALSE;
@@ -80,33 +128,44 @@ static BOOL null_name(POBJECT_ATTRIBUTES attributes) {
     return FALSE;
 }
 
-static NTSTATUS duplicate_null(PHANDLE file, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
-                               PIO_STATUS_BLOCK status) {
-    GENERIC_MAPPING mapping = {FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
-    MapGenericMask(&access, &mapping);
-    if (!DuplicateHandle(GetCurrentProcess(), null_handle, GetCurrentProcess(), file, access,
-                         (attributes->Attributes & OBJ_INHERIT) != 0, 0))
-        return (NTSTATUS)0xc0000022L;
-    status->Status = 0;
-    status->Information = 1; /* FILE_OPENED */
-    return 0;
+static NTSTATUS broker_null(broker_request *request, PHANDLE file, POBJECT_ATTRIBUTES attributes,
+                            PIO_STATUS_BLOCK status, const void *extra) {
+    if (attributes->SecurityDescriptor || attributes->SecurityQualityOfService ||
+        request->extra_size > broker_max_extra) return static_cast<NTSTATUS>(0xc0000022L);
+    request->object_attributes = attributes->Attributes;
+    broker_response response = {};
+    std::vector<BYTE> output;
+    if (!broker_call(request, extra, &response, &output) || response.error || !output.empty())
+        return static_cast<NTSTATUS>(0xc0000022L);
+    if (response.status >= 0) {
+        *file = reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(response.handle));
+        status->Status = response.status;
+        status->Information = static_cast<ULONG_PTR>(response.information);
+    }
+    return response.status;
 }
 
-/* Bound diagnostics to the owned fixture; this DLL is an experiment only. */
-static void trace_denial(const char *operation, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes) {
-    static LONG count;
-    if (InterlockedIncrement(&count) > 24 || !attributes || !attributes->ObjectName) return;
-    char path[2048], line[2304];
-    UNICODE_STRING *name = attributes->ObjectName;
-    int size = WideCharToMultiByte(CP_UTF8, 0, name->Buffer, (int)(name->Length / sizeof(wchar_t)),
-                                   path, sizeof(path) - 1, NULL, NULL);
-    if (!size) return;
-    path[size] = 0;
-    int length = snprintf(line, sizeof(line), "NUL-TRACE operation=%s access=%08lx root=%p path=%s\n",
-                          operation, access, attributes->RootDirectory, path);
-    DWORD written;
-    if (length > 0 && (size_t)length < sizeof(line))
-        WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, (DWORD)length, &written, NULL);
+static DWORD WINAPI hook_final_path(HANDLE file, LPWSTR buffer, DWORD capacity, DWORD flags) {
+    DWORD result = real_final_path(file, buffer, capacity, flags);
+    if (result || GetLastError() != ERROR_ACCESS_DENIED) return result;
+    DWORD original_error = GetLastError();
+    broker_request request = {};
+    request.operation = broker_final_path;
+    request.handle = reinterpret_cast<ULONG_PTR>(file);
+    request.flags = flags;
+    broker_response response = {};
+    std::vector<BYTE> output;
+    if (!broker_call(&request, NULL, &response, &output)) { SetLastError(original_error); return 0; }
+    if (response.error) { SetLastError(response.error); return 0; }
+    size_t length = static_cast<size_t>(response.information);
+    if (length >= 32768 || output.size() != (length + 1) * sizeof(wchar_t) ||
+        reinterpret_cast<const wchar_t *>(output.data())[length] != 0) {
+        SetLastError(ERROR_INVALID_DATA);
+        return 0;
+    }
+    if (capacity <= length) return static_cast<DWORD>(length + 1);
+    memcpy(buffer, output.data(), output.size());
+    return static_cast<DWORD>(length);
 }
 
 static NTSTATUS NTAPI hook_create_file(PHANDLE file, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
@@ -114,24 +173,39 @@ static NTSTATUS NTAPI hook_create_file(PHANDLE file, ACCESS_MASK access, POBJECT
     ULONG disposition, ULONG options, PVOID extended, ULONG extended_length) {
     NTSTATUS result = real_create_file(file, access, attributes, status, allocation,
                                       file_attributes, share, disposition, options, extended, extended_length);
-    if (result == (NTSTATUS)0xc0000022L && null_name(attributes))
-        return duplicate_null(file, access, attributes, status);
-    if (result == (NTSTATUS)0xc0000022L) trace_denial("NtCreateFile", access, attributes);
+    if (result == static_cast<NTSTATUS>(0xc0000022L) && null_name(attributes)) {
+        broker_request request = {};
+        request.operation = broker_create_null;
+        request.access = access;
+        request.share = share;
+        request.disposition = disposition;
+        request.options = options;
+        request.file_attributes = file_attributes;
+        request.has_allocation = allocation != NULL;
+        request.allocation = allocation ? allocation->QuadPart : 0;
+        request.extra_size = extended_length;
+        return broker_null(&request, file, attributes, status, extended);
+    }
     return result;
 }
 
 static NTSTATUS NTAPI hook_open_file(PHANDLE file, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
                                      PIO_STATUS_BLOCK status, ULONG share, ULONG options) {
     NTSTATUS result = real_open_file(file, access, attributes, status, share, options);
-    if (result == (NTSTATUS)0xc0000022L && null_name(attributes))
-        return duplicate_null(file, access, attributes, status);
-    if (result == (NTSTATUS)0xc0000022L) trace_denial("NtOpenFile", access, attributes);
+    if (result == static_cast<NTSTATUS>(0xc0000022L) && null_name(attributes)) {
+        broker_request request = {};
+        request.operation = broker_open_null;
+        request.access = access;
+        request.share = share;
+        request.options = options;
+        return broker_null(&request, file, attributes, status, NULL);
+    }
     return result;
 }
 
 static BOOL finish_child(BOOL created, DWORD flags, LPPROCESS_INFORMATION process) {
     if (!created) return FALSE;
-    if (!inject_null(process->hProcess, null_handle, dll_path) ||
+    if (!inject_null(process->hProcess, &endpoint, dll_path) ||
         (!(flags & CREATE_SUSPENDED) && ResumeThread(process->hThread) == (DWORD)-1)) {
         DWORD error = GetLastError();
         TerminateProcess(process->hProcess, 125);
@@ -166,9 +240,9 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     DetourRestoreAfterWith();
     DWORD bytes = 0;
-    null_payload *payload = (null_payload *)DetourFindPayloadEx(payload_id, &bytes);
+    broker_payload *payload = (broker_payload *)DetourFindPayloadEx(payload_id, &bytes);
     if (!payload || bytes != sizeof(*payload)) return FALSE;
-    null_handle = payload->handle;
+    endpoint = *payload;
     if (!prototype_dll_name(module, dll_path, sizeof(dll_path))) return FALSE;
     FARPROC open_address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile");
     static_assert(sizeof(open_address) == sizeof(real_open_file), "Native function pointer size");
@@ -178,6 +252,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     LONG error = DetourUpdateThread(GetCurrentThread());
     if (!error) error = DetourAttach(&real_create_file, hook_create_file);
     if (!error) error = DetourAttach(&real_open_file, hook_open_file);
+    if (!error) error = DetourAttach(&real_final_path, hook_final_path);
     if (!error) error = DetourAttach(&real_create_process_w, hook_create_process_w);
     if (!error) error = DetourAttach(&real_create_process_a, hook_create_process_a);
     if (error) { DetourTransactionAbort(); return FALSE; }

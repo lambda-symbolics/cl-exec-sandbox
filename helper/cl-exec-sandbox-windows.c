@@ -378,6 +378,8 @@ static HANDLE restricted_token(void) {
 #ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
 #ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
 extern BOOL sandbox_inject_null(HANDLE process);
+extern BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *profile);
+extern void sandbox_stop_broker(void);
 #endif
 static int diagnostic_mode(void) {
     char mode[32];
@@ -459,13 +461,19 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
         fail(L"assign suspended process to job", error);
     }
 #ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
-    if (mode == 3) require(sandbox_inject_null(process.hProcess), L"inject native Null prototype");
+    if (mode == 3) {
+        require(sandbox_start_broker(job, sid, profile), L"start native compatibility broker");
+        require(sandbox_inject_null(process.hProcess), L"inject native compatibility client");
+    }
 #endif
     require(ResumeThread(process.hThread) != (DWORD)-1, L"start contained process");
     require(WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0, L"wait for command");
     DWORD status;
     require(GetExitCodeProcess(process.hProcess, &status), L"read command exit code");
     terminate_job(job);
+#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
+    if (mode == 3) sandbox_stop_broker();
+#endif
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
     CloseHandle(job);
