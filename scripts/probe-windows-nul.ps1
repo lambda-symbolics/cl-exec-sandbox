@@ -91,4 +91,16 @@ $delayed = Join-Path $workspace 'descendant-survived.txt'
 Invoke-Probe 'combined-hook' 'descendant-cleanup' $child @('spawn-exit', $delayed) -Expected 0
 Start-Sleep -Seconds 2
 if (Test-Path -LiteralPath $delayed) { throw 'A sandbox descendant survived the main process.' }
+$originalPrograms = $programs
+$programs = Join-Path $root 'programs žluťoučký 日本'
+New-Item -ItemType Directory -Path $programs | Out-Null
+foreach ($name in @('cl-exec-sandbox-windows-diagnostic.exe', 'windows-child.exe', 'cl-exec-sandbox-null.dll')) {
+    Copy-Item -LiteralPath (Join-Path $originalPrograms $name) -Destination $programs
+}
+$helper = Join-Path $programs 'cl-exec-sandbox-windows-diagnostic.exe'
+$child = Join-Path $programs 'windows-child.exe'
+$env:PATH = $programs + [IO.Path]::PathSeparator + $env:PATH
+$env:CL_EXEC_SANDBOX_NULL_BASENAME = '1'
+Invoke-Probe 'combined-hook' 'unicode-nul' $child @('nul') -Expected 0
+Invoke-Probe 'combined-hook' 'unicode-descendant' $child @('nul-descendant') -Expected 0
 exit 0

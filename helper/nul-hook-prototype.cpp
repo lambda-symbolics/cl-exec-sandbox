@@ -1,5 +1,5 @@
 /* Experimental x64 compatibility hook. AppContainer enforces all access policy.
- * This experiment uses an ASCII fixture path for Detours' import-table API. */
+ * Compare absolute ASCII imports with ASCII basename imports via a Unicode PATH. */
 #define UNICODE
 #define _UNICODE
 #define _WIN32_WINNT 0x0A00
@@ -23,10 +23,12 @@ static BOOL inject_null(HANDLE process, HANDLE source, const char *dll) {
     return DetourUpdateProcessWithDll(process, libraries, 1);
 }
 
-#ifndef CL_EXEC_SANDBOX_NULL_DLL
-extern "C" BOOL sandbox_inject_null(HANDLE process) {
+static BOOL prototype_dll_name(HMODULE module, char *result, size_t capacity) {
+    char option[2];
+    if (GetEnvironmentVariableA("CL_EXEC_SANDBOX_NULL_BASENAME", option, sizeof(option)) == 1 &&
+        option[0] == '1') return strcpy_s(result, capacity, "cl-exec-sandbox-null.dll") == 0;
     wchar_t path[32768];
-    DWORD length = GetModuleFileNameW(NULL, path, 32768);
+    DWORD length = GetModuleFileNameW(module, path, 32768);
     if (!length || length >= 32768) return FALSE;
     wchar_t *leaf = wcsrchr(path, L'\\');
     if (!leaf) { SetLastError(ERROR_BAD_PATHNAME); return FALSE; }
@@ -34,12 +36,19 @@ extern "C" BOOL sandbox_inject_null(HANDLE process) {
         SetLastError(ERROR_FILENAME_EXCED_RANGE);
         return FALSE;
     }
-    char ascii[32768];
-    for (size_t i = 0; ; ++i) {
+    for (size_t i = 0; i < capacity; ++i) {
         if (path[i] > 127) { SetLastError(ERROR_NO_UNICODE_TRANSLATION); return FALSE; }
-        ascii[i] = (char)path[i];
-        if (!path[i]) break;
+        result[i] = (char)path[i];
+        if (!path[i]) return TRUE;
     }
+    SetLastError(ERROR_FILENAME_EXCED_RANGE);
+    return FALSE;
+}
+
+#ifndef CL_EXEC_SANDBOX_NULL_DLL
+extern "C" BOOL sandbox_inject_null(HANDLE process) {
+    char ascii[32768];
+    if (!prototype_dll_name(NULL, ascii, sizeof(ascii))) return FALSE;
     HANDLE source = CreateFileW(L"\\\\?\\GLOBALROOT\\Device\\Null", GENERIC_READ | GENERIC_WRITE,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (source == INVALID_HANDLE_VALUE) return FALSE;
@@ -160,13 +169,7 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     null_payload *payload = (null_payload *)DetourFindPayloadEx(payload_id, &bytes);
     if (!payload || bytes != sizeof(*payload)) return FALSE;
     null_handle = payload->handle;
-    wchar_t path[32768];
-    DWORD length = GetModuleFileNameW(module, path, 32768);
-    if (!length || length >= 32768) return FALSE;
-    for (DWORD i = 0; i <= length; ++i) {
-        if (path[i] > 127) return FALSE;
-        dll_path[i] = (char)path[i];
-    }
+    if (!prototype_dll_name(module, dll_path, sizeof(dll_path))) return FALSE;
     FARPROC open_address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile");
     static_assert(sizeof(open_address) == sizeof(real_open_file), "Native function pointer size");
     memcpy(&real_open_file, &open_address, sizeof(real_open_file));
