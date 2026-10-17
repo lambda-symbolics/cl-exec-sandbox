@@ -31,7 +31,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Injector compilation failed.' }
           link /nologo /out:build/cl-exec-sandbox-windows-diagnostic.exe build/helper.obj build/inject.obj detours-reference/lib.X64/detours.lib advapi32.lib userenv.lib ole32.lib
           if ($LASTEXITCODE -ne 0) { throw 'Diagnostic helper linking failed.' }
-          cl /nologo /MT /W4 /WX /EHsc /LD /DCL_EXEC_SANDBOX_NULL_DLL /I detours-reference/include helper/nul-hook-prototype.cpp /Fobuild/shim.obj /link /out:build/cl-exec-sandbox-null.dll '/EXPORT:null_hook_marker,@1' detours-reference/lib.X64/detours.lib ntdll.lib
+          cl /nologo /MT /W4 /WX /EHsc /LD /DCL_EXEC_SANDBOX_NULL_DLL /I detours-reference/include helper/nul-hook-prototype.cpp /Fobuild/shim.obj /link /out:build/cl-exec-sandbox-null.dll '/EXPORT:null_hook_marker,@1' detours-reference/lib.X64/detours.lib ntdll.lib advapi32.lib
           if ($LASTEXITCODE -ne 0) { throw 'Null shim compilation failed.' }
           clang -std=c11 -O2 -Wall -Wextra -Werror tests/windows-child.c -o build/windows-child.exe -ladvapi32 -lws2_32
           if ($LASTEXITCODE -ne 0) { throw 'Native child compilation failed.' }

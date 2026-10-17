@@ -28,7 +28,8 @@ function Invoke-Checked {
 }
 
 function Invoke-Probe {
-    param([string]$Mode, [string]$Name, [string]$Program, [string[]]$Arguments)
+    param([string]$Mode, [string]$Name, [string]$Program, [string[]]$Arguments,
+          [int]$Expected = -1)
     Write-Host "PROBE mode=$Mode name=$Name"
     if ($Mode -eq 'ordinary-user') {
         & $Program @Arguments
@@ -37,8 +38,9 @@ function Invoke-Probe {
         $env:CL_EXEC_SANDBOX_DIAGNOSTIC_MODE = $Mode
         $profile = (& $helper --new-profile).Trim()
         if ($LASTEXITCODE -ne 0) { throw 'Could not allocate the diagnostic profile.' }
-        $rules = @('read', $programs, 'read', $gitRoot, 'write', $workspace,
+        $rules = @('read', $programs, 'write', $workspace,
                    'read', (Join-Path $workspace '.git'))
+        if ($Program -eq $git) { $rules += @('read', $gitRoot) }
         try {
             & $helper --run $profile isolated $workspace @rules -- $Program @Arguments
             $status = $LASTEXITCODE
@@ -49,6 +51,9 @@ function Invoke-Probe {
         if ($status -eq 125) { throw "Native diagnostic launch failed for $Mode/$Name." }
     }
     Write-Host "RESULT mode=$Mode name=$Name exit=$status"
+    if ($Expected -ge 0 -and $status -ne $Expected) {
+        throw "Unexpected result for $Mode/${Name}: got $status, expected $Expected."
+    }
 }
 
 Invoke-Checked $git @('-C', $workspace, 'init', '--quiet')
@@ -64,4 +69,25 @@ foreach ($mode in @('ordinary-user', 'restricted-only', 'appcontainer-only', 'co
     Invoke-Probe $mode 'git-status' $git @('-C', $workspace, 'status', '--porcelain')
     Invoke-Probe $mode 'git-rev-parse' $git @('-C', $workspace, 'rev-parse', '--show-toplevel')
 }
+$outside = Join-Path $root 'outside'
+New-Item -ItemType Directory -Path $outside | Out-Null
+$secret = Join-Path $outside 'secret.txt'
+[IO.File]::WriteAllText($secret, 'outside fixture')
+Invoke-Probe 'combined-hook' 'appcontainer-identity' $child @('identity') -Expected 0
+Invoke-Probe 'combined-hook' 'workspace-read' $child @('read', (Join-Path $workspace 'tracked.txt')) -Expected 0
+Invoke-Probe 'combined-hook' 'workspace-write' $child @('write', (Join-Path $workspace 'allowed.txt')) -Expected 0
+Invoke-Probe 'combined-hook' 'outside-read' $child @('read', $secret) -Expected 5
+Invoke-Probe 'combined-hook' 'outside-write' $child @('write', (Join-Path $outside 'denied.txt')) -Expected 5
+Invoke-Probe 'combined-hook' 'metadata-acl' $child @('change-acl', (Join-Path $workspace '.git/config')) -Expected 5
+$listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+$listener.Start()
+try {
+    $port = $listener.LocalEndpoint.Port.ToString()
+    Invoke-Probe 'ordinary-user' 'network-control' $child @('connect', $port) -Expected 0
+    Invoke-Probe 'combined-hook' 'network-denial' $child @('connect', $port) -Expected 5
+} finally { $listener.Stop() }
+$delayed = Join-Path $workspace 'descendant-survived.txt'
+Invoke-Probe 'combined-hook' 'descendant-cleanup' $child @('spawn-exit', $delayed) -Expected 0
+Start-Sleep -Seconds 2
+if (Test-Path -LiteralPath $delayed) { throw 'A sandbox descendant survived the main process.' }
 exit 0
