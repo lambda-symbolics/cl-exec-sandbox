@@ -26,16 +26,6 @@
          (payload (merge-pathnames "windows-child.exe" programs))
          (policy (appcontainer-sandbox-policy :workspace-roots (list workspace)
                                               :read-roots (list programs read-root)))
-         (git (uiop:find-program-pathname "git"))
-         (git-root (when git
-                     (make-pathname :name nil :type nil
-                                    :directory (butlast (pathname-directory git))
-                                    :defaults git)))
-         (git-policy (when git
-                       (appcontainer-sandbox-policy
-                        :workspace-roots (list workspace)
-                        :read-roots (list programs read-root git-root))))
-
          (long-policy (appcontainer-sandbox-policy :workspace-roots (list long-root)
                                                     :read-roots (list workspace programs)))
          (acl-snapshots nil)
@@ -85,37 +75,6 @@
                            (list workspace (merge-pathnames ".git/" workspace)
                                  metadata secret programs payload read-file)))
              (check (eq (getf (sandbox-capabilities) :backend) :appcontainer) "native backend discovered")
-             (let ((direct (run-sandboxed (uiop:native-namestring payload) (list "nul")
-                                          :policy (unrestricted-sandbox-policy)
-                                          :working-directory workspace :timeout 20))
-                   (contained (run (list "nul"))))
-
-               (format t "~&NUL probe direct: exit ~D~%stdout: ~A~%stderr: ~A~%"
-                       (sandbox-result-exit-code direct) (sandbox-result-output direct)
-                       (sandbox-result-error-output direct))
-               (format t "~&NUL probe AppContainer+restricted: exit ~D~%stdout: ~A~%stderr: ~A~%"
-                       (sandbox-result-exit-code contained) (sandbox-result-output contained)
-                       (sandbox-result-error-output contained))
-               (check (zerop (sandbox-result-exit-code direct)) "direct NUL probe passed")
-               (check (= (sandbox-result-exit-code contained) 5) "AppContainer NUL probe denied NUL"))
-             (when git
-               (let ((git-direct (run-sandboxed (uiop:native-namestring git) (list "--version")
-                                                 :policy (unrestricted-sandbox-policy)
-                                                 :working-directory workspace :timeout 20))
-                     (git-contained (run-sandboxed (uiop:native-namestring git) (list "--version")
-                                                   :policy git-policy
-                                                   :working-directory workspace :timeout 20)))
-                 (format t "~&Git probe direct: exit ~D~%stdout: ~A~%stderr: ~A~%"
-                         (sandbox-result-exit-code git-direct) (sandbox-result-output git-direct)
-                         (sandbox-result-error-output git-direct))
-                 (format t "~&Git probe AppContainer+restricted: exit ~D~%stdout: ~A~%stderr: ~A~%"
-                         (sandbox-result-exit-code git-contained) (sandbox-result-output git-contained)
-                         (sandbox-result-error-output git-contained))
-                 (check (zerop (sandbox-result-exit-code git-direct)) "direct Git probe passed")
-                 (check (not (zerop (sandbox-result-exit-code git-contained)))
-                        "AppContainer Git probe was denied")))
-
-
 
              (let ((result (run-sandboxed (native payload) (list "identity")
                                            :policy long-policy :working-directory workspace

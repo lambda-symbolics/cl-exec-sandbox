@@ -68,11 +68,34 @@ static int probe_nul(void) {
     }
     return status;
 }
+static int probe_nul_security(void) {
+    HANDLE handle = CreateFileW(L"\\\\?\\GLOBALROOT\\Device\\Null", READ_CONTROL,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (handle == INVALID_HANDLE_VALUE) return (int)GetLastError();
+    PSECURITY_DESCRIPTOR descriptor = NULL;
+    SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                                       DACL_SECURITY_INFORMATION;
+    DWORD error = GetSecurityInfo(handle, SE_FILE_OBJECT, information,
+                                 NULL, NULL, NULL, NULL, &descriptor);
+    if (!error) {
+        wchar_t *text = NULL;
+        if (ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, SDDL_REVISION_1,
+                                                                 information, &text, NULL)) {
+            wprintf(L"NUL security=%ls\n", text);
+            LocalFree(text);
+        } else error = GetLastError();
+    }
+    if (descriptor) LocalFree(descriptor);
+    CloseHandle(handle);
+    return (int)error;
+}
+
 static int probe_nul_descendant(void) {
     wchar_t executable[32768], line[32768];
     if (!GetModuleFileNameW(NULL, executable, sizeof(executable) / sizeof(*executable))) return 99;
     if (swprintf(line, sizeof(line) / sizeof(*line), L"\"%ls\" nul", executable) < 0) return 99;
-    STARTUPINFOW startup = {sizeof(startup)}; PROCESS_INFORMATION process = {0};
+    STARTUPINFOW startup = {0}; PROCESS_INFORMATION process = {0};
+    startup.cb = sizeof(startup);
     if (!CreateProcessW(executable, line, NULL, NULL, FALSE, CREATE_NO_WINDOW,
                         NULL, NULL, &startup, &process)) return (int)GetLastError();
     WaitForSingleObject(process.hProcess, INFINITE);
@@ -100,6 +123,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (!wcscmp(argv[1], L"nul")) return probe_nul();
     if (!wcscmp(argv[1], L"nul-descendant")) return probe_nul_descendant();
+    if (!wcscmp(argv[1], L"nul-security")) return probe_nul_security();
 
     if (argc < 3) return 99;
 
@@ -129,7 +153,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (!wcscmp(argv[1], L"write-delete")) {
         int error = write_file(argv[2]);
-        if (error && !status) status = error;
+        if (error) return error;
         return DeleteFileW(argv[2]) ? 0 : (int)GetLastError();
     }
     if (!wcscmp(argv[1], L"change-acl")) {

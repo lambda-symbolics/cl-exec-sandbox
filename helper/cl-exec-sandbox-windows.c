@@ -376,12 +376,6 @@ static HANDLE restricted_token(void) {
     return restricted;
 }
 #ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
-static HANDLE caller_token(void) {
-    HANDLE caller;
-    require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE |
-                             TOKEN_ASSIGN_PRIMARY, &caller), L"open caller token");
-    return caller;
-}
 static int diagnostic_mode(void) {
     char mode[32];
     DWORD length = GetEnvironmentVariableA("CL_EXEC_SANDBOX_DIAGNOSTIC_MODE", mode, sizeof(mode));
@@ -417,7 +411,7 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     startup.StartupInfo.hStdOutput = handles[1];
     startup.StartupInfo.hStdError = handles[2];
     SIZE_T bytes = 0;
-    #ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
+#ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
     int mode = diagnostic_mode();
     DWORD attribute_count = mode == 1 ? 1 : 2;
 #else
@@ -438,15 +432,20 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
     require(UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                                       handles, sizeof(handles), NULL, NULL), L"restrict inherited handles");
     wchar_t *line = command_line(count, arguments);
-    HANDLE token =
 #ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
-        mode == 2 ? caller_token() :
+    if (mode == 2) {
+        require(CreateProcessW(arguments[0], line, NULL, NULL, TRUE,
+                               EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                               NULL, cwd, &startup.StartupInfo, &process), L"create plain AppContainer process");
+    } else
 #endif
-        restricted_token();
-    require(CreateProcessAsUserW(token, arguments[0], line, NULL, NULL, TRUE,
-                                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                                NULL, cwd, &startup.StartupInfo, &process), L"create AppContainer process");
-    CloseHandle(token);
+    {
+        HANDLE token = restricted_token();
+        require(CreateProcessAsUserW(token, arguments[0], line, NULL, NULL, TRUE,
+                                    EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                                    NULL, cwd, &startup.StartupInfo, &process), L"create restricted process");
+        CloseHandle(token);
+    }
     if (!AssignProcessToJobObject(job, process.hProcess)) {
         DWORD error = GetLastError();
         TerminateProcess(process.hProcess, FAILURE);
