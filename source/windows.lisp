@@ -2,6 +2,12 @@
 
 ;;;; Native AppContainer launch plans
 
+(defun windows--compatibility-libraries (helper)
+  "Return the adjacent architecture-specific clients needed by sandboxed processes."
+  (let ((directory (uiop:pathname-directory-pathname helper)))
+    (mapcar (lambda (name) (merge-pathnames name directory))
+            '("cl-exec-sandbox-compat64.dll" "cl-exec-sandbox-compat32.dll"))))
+
 (defun windows--find-helper ()
   "Return the explicitly configured or locally built Windows helper."
   (let* ((override (uiop:getenv "CL_EXEC_SANDBOX_WINDOWS_HELPER"))
@@ -110,6 +116,15 @@
     (unwind-protect
          (let ((rules (rules--resolve-rules policy cwd))
                (native-rules nil))
+           ;; Only the two injected clients are implicit read scopes, not the
+           ;; helper directory or its unrelated contents.
+           (dolist (library (windows--compatibility-libraries helper))
+             (unless (uiop:file-exists-p library)
+               (windows--unsupported :platform-backend
+                                     "The Windows helper requires both adjacent compatibility DLLs."))
+             (setf native-rules
+                   (append native-rules
+                           (list "read" (windows--validate-path library)))))
            (dolist (rule rules)
              (let* ((path (resolved-filesystem-rule-path rule))
                     (native (windows--validate-path path)))

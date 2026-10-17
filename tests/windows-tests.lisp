@@ -79,8 +79,12 @@
              (let ((result (run-sandboxed (native payload) (list "identity")
                                            :policy long-policy :working-directory workspace
                                           :timeout 20 :output-limit 8192 :error-output-limit 8192)))
-               (check (zerop (sandbox-result-exit-code result))
-                      "long local path survives native sandbox setup"))
+                 (check (zerop (sandbox-result-exit-code result))
+                        (format nil "long local path setup: exit ~D; stdout ~A; stderr ~A"
+                                (sandbox-result-exit-code result)
+                                (sandbox-result-output result)
+                                (sandbox-result-error-output result))))
+               (status (list "read" (native (cl-exec-sandbox::windows--find-helper))) 5)
              (dolist (command (list (list "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" "-NoProfile" "-NonInteractive" "-Command" "Write-Output shell-ok")))
                (let ((result (run-sandboxed (first command) (rest command)
                                           :policy policy :working-directory workspace :timeout 20)))
