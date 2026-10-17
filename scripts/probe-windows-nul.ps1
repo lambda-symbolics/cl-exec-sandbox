@@ -45,7 +45,7 @@ function Invoke-Probe {
         if ($LASTEXITCODE -ne 0) { throw 'Could not allocate the sandbox profile.' }
         $rules = @('read', $programs, 'write', $workspace,
                    'read', (Join-Path $workspace '.git'))
-        if ($Program -eq $git) { $rules += @('read', $gitRoot) }
+        if ($Program -eq $git -or $Program -eq $windowsPowerShell) { $rules += @('read', $gitRoot) }
         $actualArguments = @($Arguments | ForEach-Object {
             $_ -replace '@PROFILE@', $profile
         })
@@ -65,12 +65,49 @@ function Invoke-Probe {
     if ($Capture) { return $captured }
 }
 
+$windowsPowerShell = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
 Invoke-Checked $git @('-C', $workspace, 'init', '--quiet')
 Invoke-Checked $git @('-C', $workspace, 'config', 'user.email', 'diagnostic@example.invalid')
 Invoke-Checked $git @('-C', $workspace, 'config', 'user.name', 'diagnostic')
 [IO.File]::WriteAllText((Join-Path $workspace 'tracked.txt'), 'fixture')
 Invoke-Checked $git @('-C', $workspace, 'add', 'tracked.txt')
 Invoke-Checked $git @('-C', $workspace, 'commit', '--quiet', '-m', 'fixture')
+$env:CL_SANDBOX_PROBE_GIT = $git
+$env:CL_SANDBOX_PROBE_WORKSPACE = $workspace
+$powerShellProbe = @'
+$ErrorActionPreference = 'Stop'
+try {
+    Write-Host ('HOST ' + $PSVersionTable.PSVersion)
+    Write-Host ('MODULEPATH ' + $env:PSModulePath)
+    Get-PSProvider | ForEach-Object { Write-Host ('PROVIDER ' + $_.Name + ' ' + $_.ImplementingType.Assembly.Location) }
+    Get-PSDrive | ForEach-Object { Write-Host ('DRIVE ' + $_.Name + ' ' + $_.Root) }
+    Write-Host ('BEFORE path=' + (Get-Location).Path + ' provider=' + (Get-Location).ProviderPath + ' cwd=' + [Environment]::CurrentDirectory)
+    Set-Location -LiteralPath $env:CL_SANDBOX_PROBE_WORKSPACE
+    Write-Host ('AFTER path=' + (Get-Location).Path + ' provider=' + (Get-Location).ProviderPath + ' cwd=' + [Environment]::CurrentDirectory)
+    & $env:CL_SANDBOX_PROBE_GIT status --porcelain
+    if ($LASTEXITCODE -ne 0) { throw "status=$LASTEXITCODE" }
+    & $env:CL_SANDBOX_PROBE_GIT rev-parse --show-toplevel
+    if ($LASTEXITCODE -ne 0) { throw "rev-parse=$LASTEXITCODE" }
+    & $env:CL_SANDBOX_PROBE_GIT diff --no-index -- /dev/null tracked.txt
+    if ($LASTEXITCODE -ne 1) { throw "diff=$LASTEXITCODE" }
+    exit 0
+} catch {
+    Write-Host ($_ | Format-List * -Force | Out-String)
+    Write-Host $_.ScriptStackTrace
+    exit 91
+}
+'@
+$encodedPowerShellProbe = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($powerShellProbe))
+$inheritedModulePath = $env:PSModulePath
+foreach ($moduleMode in @('inherited', 'winps-first')) {
+    if ($moduleMode -eq 'winps-first') {
+        $env:PSModulePath = (Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/Modules') + ';' + $inheritedModulePath
+    }
+    foreach ($mode in @('ordinary-user', 'production-sandbox')) {
+        Invoke-Probe $mode "winps-git-$moduleMode" $windowsPowerShell @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedPowerShellProbe) -Expected 0
+    }
+}
+$env:PSModulePath = $inheritedModulePath
 foreach ($mode in @('ordinary-user', 'production-sandbox')) {
     Invoke-Probe $mode 'nul-security' $child @('nul-security')
     Invoke-Probe $mode 'nul' $child @('nul') -Expected 0
