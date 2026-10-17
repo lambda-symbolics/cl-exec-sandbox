@@ -7,6 +7,7 @@
 #include <winternl.h>
 #include <wchar.h>
 #include <string.h>
+#include <stdio.h>
 #include "detours.h"
 
 static const GUID payload_id = {0x96c7a064, 0x183a, 0x47c3, {0xa2,0xc1,0x4d,0xf2,0x2b,0xe7,0x67,0x93}};
@@ -82,6 +83,23 @@ static NTSTATUS duplicate_null(PHANDLE file, ACCESS_MASK access, POBJECT_ATTRIBU
     return 0;
 }
 
+/* Bound diagnostics to the owned fixture; this DLL is an experiment only. */
+static void trace_denial(const char *operation, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes) {
+    static LONG count;
+    if (InterlockedIncrement(&count) > 24 || !attributes || !attributes->ObjectName) return;
+    char path[2048], line[2304];
+    UNICODE_STRING *name = attributes->ObjectName;
+    int size = WideCharToMultiByte(CP_UTF8, 0, name->Buffer, (int)(name->Length / sizeof(wchar_t)),
+                                   path, sizeof(path) - 1, NULL, NULL);
+    if (!size) return;
+    path[size] = 0;
+    int length = snprintf(line, sizeof(line), "NUL-TRACE operation=%s access=%08lx root=%p path=%s\n",
+                          operation, access, attributes->RootDirectory, path);
+    DWORD written;
+    if (length > 0 && (size_t)length < sizeof(line))
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, (DWORD)length, &written, NULL);
+}
+
 static NTSTATUS NTAPI hook_create_file(PHANDLE file, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
     PIO_STATUS_BLOCK status, PLARGE_INTEGER allocation, ULONG file_attributes, ULONG share,
     ULONG disposition, ULONG options, PVOID extended, ULONG extended_length) {
@@ -89,6 +107,7 @@ static NTSTATUS NTAPI hook_create_file(PHANDLE file, ACCESS_MASK access, POBJECT
                                       file_attributes, share, disposition, options, extended, extended_length);
     if (result == (NTSTATUS)0xc0000022L && null_name(attributes))
         return duplicate_null(file, access, attributes, status);
+    if (result == (NTSTATUS)0xc0000022L) trace_denial("NtCreateFile", access, attributes);
     return result;
 }
 
@@ -97,6 +116,7 @@ static NTSTATUS NTAPI hook_open_file(PHANDLE file, ACCESS_MASK access, POBJECT_A
     NTSTATUS result = real_open_file(file, access, attributes, status, share, options);
     if (result == (NTSTATUS)0xc0000022L && null_name(attributes))
         return duplicate_null(file, access, attributes, status);
+    if (result == (NTSTATUS)0xc0000022L) trace_denial("NtOpenFile", access, attributes);
     return result;
 }
 

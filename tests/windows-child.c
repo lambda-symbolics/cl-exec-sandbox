@@ -107,6 +107,27 @@ static int probe_nul_descendant(void) {
 }
 
 
+static int probe_cwd(void) {
+    wchar_t cwd[32768], path[32768];
+    DWORD count = GetCurrentDirectoryW(32768, cwd);
+    if (!count || count >= 32768) return (int)GetLastError();
+    wprintf(L"CWD current=%ls\n", cwd);
+    HANDLE handle = CreateFileW(cwd, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (handle == INVALID_HANDLE_VALUE) return (int)GetLastError();
+    const DWORD flags[] = {0, FILE_NAME_OPENED, VOLUME_NAME_NT, VOLUME_NAME_NT | FILE_NAME_OPENED};
+    for (unsigned i = 0; i < sizeof(flags) / sizeof(flags[0]); ++i) {
+        count = GetFinalPathNameByHandleW(handle, path, 32768, flags[i]);
+        if (count && count < 32768) wprintf(L"CWD final flags=%lu path=%ls\n", flags[i], path);
+        else wprintf(L"CWD final flags=%lu error=%lu\n", flags[i], GetLastError());
+    }
+    CloseHandle(handle);
+    count = GetLongPathNameW(cwd, path, 32768);
+    if (count && count < 32768) wprintf(L"CWD long path=%ls\n", path);
+    else wprintf(L"CWD long error=%lu\n", GetLastError());
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) return 99;
     if (!wcscmp(argv[1], L"identity")) {
@@ -124,6 +145,7 @@ int wmain(int argc, wchar_t **argv) {
     if (!wcscmp(argv[1], L"nul")) return probe_nul();
     if (!wcscmp(argv[1], L"nul-descendant")) return probe_nul_descendant();
     if (!wcscmp(argv[1], L"nul-security")) return probe_nul_security();
+    if (!wcscmp(argv[1], L"cwd")) return probe_cwd();
 
     if (argc < 3) return 99;
 

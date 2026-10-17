@@ -66,6 +66,7 @@ foreach ($mode in @('ordinary-user', 'restricted-only', 'appcontainer-only', 'co
     Invoke-Probe $mode 'nul-security' $child @('nul-security')
     Invoke-Probe $mode 'nul' $child @('nul')
     Invoke-Probe $mode 'nul-descendant' $child @('nul-descendant')
+    Invoke-Probe $mode 'cwd' $child @('cwd')
     Invoke-Probe $mode 'git-status' $git @('-C', $workspace, 'status', '--porcelain')
     Invoke-Probe $mode 'git-rev-parse' $git @('-C', $workspace, 'rev-parse', '--show-toplevel')
 }
