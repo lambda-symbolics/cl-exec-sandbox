@@ -97,11 +97,10 @@ foreach ($mask in @(0, 128, 160)) {
     $rules = @('read', $programs, 'read', $gitRoot, 'write', $workspace, 'write', $checkoutContainer)
     try {
         if ($mask) {
+            $rights = if ($mask -eq 128) { 'RA' } else { 'RA,X' }
             foreach ($sid in @($packageSid, $restrictingSid)) {
-                $originalAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,
-                    [Security.AccessControl.FileSystemRights]$mask, 'None', 'None', 'Allow'))
+                Invoke-Checked "$env:SystemRoot/System32/icacls.exe" @($root, '/grant', "*$($sid.Value):($rights)")
             }
-            Set-Acl -LiteralPath $root -AclObject $originalAcl
         }
         foreach ($path in @('C:\', 'C:\Users', (Split-Path $root -Parent), $root, $checkoutContainer)) {
             & $helper --run $profile isolated $workspace @rules -- $child attributes $path
@@ -117,9 +116,9 @@ foreach ($mask in @(0, 128, 160)) {
     } finally {
         & $helper --cleanup $profile @rules
         if ($mask) {
-            $restored = Get-Acl -LiteralPath $root
-            foreach ($sid in @($packageSid, $restrictingSid)) { $restored.PurgeAccessRules($sid) }
-            Set-Acl -LiteralPath $root -AclObject $restored
+            foreach ($sid in @($packageSid, $restrictingSid)) {
+                Invoke-Checked "$env:SystemRoot/System32/icacls.exe" @($root, '/remove:g', "*$($sid.Value)")
+            }
         }
         if ((Get-Acl -LiteralPath $root).Sddl -ne $beforeAcl) { throw 'Ancestor DACL cleanup mismatch.' }
     }
