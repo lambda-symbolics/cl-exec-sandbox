@@ -245,10 +245,13 @@ static bool make_security(PSID package) {
 /* LOCAL names are expanded inside an AppContainer, not in the desktop
  * helper. Create the server in that exact package/session namespace. */
 static std::wstring server_pipe_name(PSID package, const wchar_t *profile) {
-    wchar_t objects[512];
+    wchar_t objects[512], prefix[64];
     ULONG required = 0;
-    if (!GetAppContainerNamedObjectPath(NULL, package, 512, objects, &required)) return std::wstring();
-    return L"\\\\.\\pipe" + std::wstring(objects) + L"\\" + profile + L"-null";
+    DWORD session = 0;
+    if (!GetAppContainerNamedObjectPath(NULL, package, 512, objects, &required) ||
+        !ProcessIdToSessionId(GetCurrentProcessId(), &session) ||
+        swprintf_s(prefix, 64, L"\\\\.\\pipe\\Sessions\\%lu\\", session) < 0) return std::wstring();
+    return std::wstring(prefix) + objects + L"\\" + profile + L"-null";
 }
 
 extern "C" BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *profile) {
