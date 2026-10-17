@@ -1,8 +1,5 @@
-name: Windows NUL sandbox diagnostics
-on:
-  push:
-    branches: [investigate/nul-git-compat]
-  workflow_dispatch:
+name: Windows native compatibility
+on: [push, workflow_dispatch]
 permissions:
   contents: read
 jobs:

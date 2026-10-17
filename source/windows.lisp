@@ -81,18 +81,21 @@
                               "AppContainer accepts workspace roots and explicit local paths only.")))))
 
 (defun windows--validate-path (path)
-  "Require a drive-qualified local path; native validation also checks filesystem aliases."
-  (let ((native (uiop:native-namestring path)))
-    (unless (and (> (length native) 3)
-                 (alpha-char-p (char native 0))
-                 (char= (char native 1) #\:)
-                 (find (char native 2) '(#\/ #\\))
-                 (not (find #\: native :start 2))
+  "Return a local drive path, normalizing SBCL's extended-length spelling."
+  (let* ((native (uiop:native-namestring path))
+         (local (if (uiop:string-prefix-p "\\\\?\\" native)
+                    (subseq native 4)
+                    native)))
+    (unless (and (> (length local) 3)
+                 (alpha-char-p (char local 0))
+                 (char= (char local 1) #\:)
+                 (find (char local 2) '(#\/ #\\))
+                 (not (find #\: local :start 2))
                  (notany (lambda (component) (member component '("." "..") :test #'string=))
-                         (uiop:split-string native :separator '(#\/ #\\))))
+                         (uiop:split-string local :separator '(#\/ #\\))))
       (windows--unsupported :filesystem-local-path
                             "AppContainer grants require local, non-root, drive-qualified paths without aliases."))
-    native))
+    local))
 
 (defun windows--appcontainer-plan
     (program arguments policy cwd environment clear-environment-p)

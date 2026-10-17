@@ -91,8 +91,8 @@ and private profile storage. Networking is isolated, including loopback.
 
 The backend rejects whole-host policies, network modes other than =:isolated=,
 proc mounts, PID namespaces, globs, drive roots, UNC/device paths, reparse
-points, hard-linked files, and paths of 240 characters
-or more. The default protected metadata names are =.git=, =.agents=, and =.codex=.
+points, and hard-linked files. Extended-length local drive paths are supported.
+The default protected metadata names are =.git=, =.agents=, and =.codex=.
 This backend is not policy-equivalent to the Linux whole-host presets.
 
 Filesystem grants are temporary SID-specific ACL entries. Native execution

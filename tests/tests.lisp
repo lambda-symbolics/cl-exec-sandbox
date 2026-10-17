@@ -775,11 +775,31 @@ host. They do not verify that macOS enforces the profile."
       (sb-thread:join-thread thread :default nil)))
   nil)
 
+(defun test-windows-local-paths ()
+  "Accept extended local drive paths without admitting device or UNC namespaces."
+  (dolist (text '("C:\\work\\project\\" "\\\\?\\C:\\work\\project\\"))
+    (test-assert
+     (string= "C:\\work\\project\\"
+              (cl-exec-sandbox::windows--validate-path
+               (uiop:parse-native-namestring text)))
+     "local drive spellings yield the same helper path"))
+  (dolist (text '("C:\\" "\\\\?\\UNC\\server\\share\\"
+                  "\\\\?\\GLOBALROOT\\Device\\Null" "\\\\.\\C:\\work\\"
+                  "C:\\work\\file:stream"))
+    (test-assert
+     (handler-case
+         (progn
+           (cl-exec-sandbox::windows--validate-path (uiop:parse-native-namestring text))
+           nil)
+       (sandbox-unavailable () t))
+     "non-local or aliased paths are rejected")))
+
 (defun run-tests ()
   "Run portable cases and host-supported enforcement cases, reporting skips."
   (setf *test-count* 0)
   (test-executable-file-detection)
   (test-policy-validation)
+  (test-windows-local-paths)
   (test-seatbelt-profile-translation)
   (test-external-execution-context)
   (test-external-execution-without-process-group-helper)
