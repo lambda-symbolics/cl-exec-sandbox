@@ -97,9 +97,8 @@ foreach ($mask in @(0, 128, 160)) {
     $rules = @('read', $programs, 'read', $gitRoot, 'write', $workspace, 'write', $checkoutContainer)
     try {
         if ($mask) {
-            $rights = if ($mask -eq 128) { 'RA' } else { 'RA,X' }
             foreach ($sid in @($packageSid, $restrictingSid)) {
-                Invoke-Checked "$env:SystemRoot/System32/icacls.exe" @($root, '/grant', "*$($sid.Value):($rights)")
+                Invoke-Checked $child @('ancestor-grant', $root, $sid.Value, $mask.ToString())
             }
         }
         foreach ($path in @('C:\', 'C:\Users', (Split-Path $root -Parent), $root, $checkoutContainer)) {
@@ -110,14 +109,14 @@ foreach ($mask in @(0, 128, 160)) {
         & $helper --run $profile isolated $workspace @rules -- $git -C $workspace worktree add --detach $destination HEAD
         $status = $LASTEXITCODE
         Write-Host "WORKTREE mask=$mask status=$status"
-        if (($mask -eq 0 -and $status -ne 128) -or ($mask -ne 0 -and $status -ne 0)) {
+        if ($status -ne 128) {
             $unexpected.Add("Ancestor control mask=$mask returned $status")
         }
     } finally {
         & $helper --cleanup $profile @rules
         if ($mask) {
             foreach ($sid in @($packageSid, $restrictingSid)) {
-                Invoke-Checked "$env:SystemRoot/System32/icacls.exe" @($root, '/remove:g', "*$($sid.Value)")
+                Invoke-Checked $child @('ancestor-grant', $root, $sid.Value, '0')
             }
         }
         if ((Get-Acl -LiteralPath $root).Sddl -ne $beforeAcl) { throw 'Ancestor DACL cleanup mismatch.' }
