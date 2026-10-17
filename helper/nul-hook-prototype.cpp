@@ -7,6 +7,7 @@
 #include <winternl.h>
 #include <wchar.h>
 #include <string.h>
+#include <stdio.h>
 #include <vector>
 #include "detours.h"
 #include "nul-protocol.h"
@@ -19,6 +20,7 @@ static BOOL inject_null(HANDLE process, const broker_payload *payload, const cha
     return DetourUpdateProcessWithDll(process, libraries, 1);
 }
 
+#ifndef CL_EXEC_SANDBOX_NULL_DLL
 static BOOL prototype_dll_name(HMODULE module, char *result, size_t capacity) {
     char option[2];
     if (GetEnvironmentVariableA("CL_EXEC_SANDBOX_NULL_BASENAME", option, sizeof(option)) == 1 &&
@@ -41,12 +43,46 @@ static BOOL prototype_dll_name(HMODULE module, char *result, size_t capacity) {
     return FALSE;
 }
 
-#ifndef CL_EXEC_SANDBOX_NULL_DLL
 extern "C" const broker_payload *sandbox_broker_endpoint(void);
-extern "C" BOOL sandbox_inject_null(HANDLE process) {
-    char ascii[32768];
-    if (!prototype_dll_name(NULL, ascii, sizeof(ascii))) return FALSE;
-    return inject_null(process, sandbox_broker_endpoint(), ascii);
+
+/* A random logon-local DOS alias permits an ASCII import name for a Unicode
+ * installation directory without depending on PATH or 8.3 name generation. */
+static BOOL alias_library(const wchar_t *profile, char *result, size_t capacity) {
+    wchar_t directory[32768];
+    DWORD length = GetModuleFileNameW(NULL, directory, 32768);
+    if (!length || length >= 32768) return FALSE;
+    wchar_t *leaf = wcsrchr(directory, L'\\');
+    if (!leaf) { SetLastError(ERROR_BAD_PATHNAME); return FALSE; }
+    *leaf = 0;
+    wchar_t existing[32768];
+    if (QueryDosDeviceW(profile, existing, 32768)) { SetLastError(ERROR_ALREADY_EXISTS); return FALSE; }
+    if (GetLastError() != ERROR_FILE_NOT_FOUND) return FALSE;
+    if (!DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, profile, directory)) return FALSE;
+    char ascii_profile[64];
+    size_t i;
+    for (i = 0; profile[i] && i + 1 < sizeof(ascii_profile); ++i) {
+        if (profile[i] > 127) { SetLastError(ERROR_NO_UNICODE_TRANSLATION); return FALSE; }
+        ascii_profile[i] = static_cast<char>(profile[i]);
+    }
+    ascii_profile[i] = 0;
+    return sprintf_s(result, capacity, "\\\\?\\%s\\cl-exec-sandbox-null.dll", ascii_profile) > 0;
+}
+
+extern "C" BOOL sandbox_remove_null_alias(const wchar_t *profile) {
+    wchar_t target[32768];
+    if (!QueryDosDeviceW(profile, target, 32768)) return GetLastError() == ERROR_FILE_NOT_FOUND;
+    return DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE |
+                            DDD_RAW_TARGET_PATH | DDD_NO_BROADCAST_SYSTEM, profile, target);
+}
+
+extern "C" BOOL sandbox_inject_null(HANDLE process, const wchar_t *profile) {
+    broker_payload payload = *sandbox_broker_endpoint();
+    char option[2];
+    BOOL alias = GetEnvironmentVariableA("CL_EXEC_SANDBOX_NULL_ALIAS", option, sizeof(option)) == 1 && option[0] == '1';
+    if (alias) {
+        if (!alias_library(profile, payload.library, sizeof(payload.library))) return FALSE;
+    } else if (!prototype_dll_name(NULL, payload.library, sizeof(payload.library))) return FALSE;
+    return inject_null(process, &payload, payload.library);
 }
 #else
 static broker_payload endpoint;
@@ -84,6 +120,18 @@ static bool transfer(HANDLE pipe, void *buffer, DWORD size, bool writing) {
     return ok;
 }
 
+static bool trace_failure(const char *stage, DWORD error) {
+    static LONG count;
+    if (InterlockedIncrement(&count) <= 24) {
+        char line[256];
+        int length = sprintf_s(line, sizeof(line), "BROKER client stage=%s error=%lu\n", stage, error);
+        DWORD written;
+        if (length > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), line, static_cast<DWORD>(length), &written, NULL);
+    }
+    SetLastError(error);
+    return false;
+}
+
 static bool broker_call(broker_request *request, const void *extra, broker_response *response,
                         std::vector<BYTE> *output) {
     request->magic = broker_magic;
@@ -94,12 +142,13 @@ static bool broker_call(broker_request *request, const void *extra, broker_respo
         pipe = CreateFileW(endpoint.pipe, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
                            FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
         if (pipe != INVALID_HANDLE_VALUE) break;
-        if (GetLastError() != ERROR_PIPE_BUSY) return false;
+        if (GetLastError() != ERROR_PIPE_BUSY) return trace_failure("pipe-open", GetLastError());
         WaitNamedPipeW(endpoint.pipe, 100);
     } while (GetTickCount64() < deadline);
     if (pipe == INVALID_HANDLE_VALUE) return false;
     ULONG server = 0;
     bool ok = GetNamedPipeServerProcessId(pipe, &server) && server == endpoint.process_id;
+    if (!ok) trace_failure("server-pid", GetLastError());
     if (ok) ok = transfer(pipe, request, sizeof(*request), true) &&
                  (!request->extra_size || transfer(pipe, const_cast<void *>(extra), request->extra_size, true)) &&
                  transfer(pipe, response, sizeof(*response), false);
@@ -111,6 +160,7 @@ static bool broker_call(broker_request *request, const void *extra, broker_respo
     }
     BYTE acknowledged = 1;
     if (ok) ok = transfer(pipe, &acknowledged, 1, true);
+    if (!ok) trace_failure("exchange", GetLastError());
     CloseHandle(pipe);
     return ok;
 }
@@ -130,16 +180,29 @@ static BOOL null_name(POBJECT_ATTRIBUTES attributes) {
 
 static NTSTATUS broker_null(broker_request *request, PHANDLE file, POBJECT_ATTRIBUTES attributes,
                             PIO_STATUS_BLOCK status, const void *extra) {
-    if (attributes->SecurityDescriptor || attributes->SecurityQualityOfService ||
-        request->extra_size > broker_max_extra) return static_cast<NTSTATUS>(0xc0000022L);
+    if (attributes->SecurityDescriptor || request->extra_size > broker_max_extra) {
+        trace_failure(attributes->SecurityDescriptor ? "security-descriptor" : "ea-size", ERROR_NOT_SUPPORTED);
+        return static_cast<NTSTATUS>(0xc0000022L);
+    }
     request->object_attributes = attributes->Attributes;
+    if (attributes->SecurityQualityOfService) {
+        const SECURITY_QUALITY_OF_SERVICE *qos =
+            static_cast<const SECURITY_QUALITY_OF_SERVICE *>(attributes->SecurityQualityOfService);
+        request->qos_present = 1;
+        request->qos_length = qos->Length;
+        request->qos_impersonation = qos->ImpersonationLevel;
+        request->qos_flags = qos->ContextTrackingMode | (static_cast<uint32_t>(qos->EffectiveOnly) << 8);
+    }
     broker_response response = {};
     std::vector<BYTE> output;
-    if (!broker_call(request, extra, &response, &output) || response.error || !output.empty())
+    if (!broker_call(request, extra, &response, &output) || response.error || !output.empty()) {
+        trace_failure("null-response", response.error);
         return static_cast<NTSTATUS>(0xc0000022L);
+    }
+    if (response.status < 0) trace_failure("native-null", static_cast<DWORD>(response.status));
     if (response.status >= 0) {
         *file = reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(response.handle));
-        status->Status = response.status;
+        status->Status = response.io_status;
         status->Information = static_cast<ULONG_PTR>(response.information);
     }
     return response.status;
@@ -237,13 +300,15 @@ extern "C" __declspec(dllexport) void null_hook_marker(void) {}
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     (void)reserved;
+    (void)module;
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
     DetourRestoreAfterWith();
     DWORD bytes = 0;
     broker_payload *payload = (broker_payload *)DetourFindPayloadEx(payload_id, &bytes);
     if (!payload || bytes != sizeof(*payload)) return FALSE;
     endpoint = *payload;
-    if (!prototype_dll_name(module, dll_path, sizeof(dll_path))) return FALSE;
+    if (!memchr(endpoint.library, 0, sizeof(endpoint.library)) ||
+        strcpy_s(dll_path, sizeof(dll_path), endpoint.library)) return FALSE;
     FARPROC open_address = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtOpenFile");
     static_assert(sizeof(open_address) == sizeof(real_open_file), "Native function pointer size");
     memcpy(&real_open_file, &open_address, sizeof(real_open_file));

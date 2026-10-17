@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <winternl.h>
 #include <sddl.h>
+#include <stdio.h>
 #include <string>
 #include <vector>
 #include "nul-protocol.h"
@@ -53,11 +54,15 @@ static bool transfer(HANDLE pipe, void *buffer, DWORD size, bool writing) {
 
 static HANDLE authenticate(HANDLE pipe) {
     ULONG pid = 0;
-    if (!GetNamedPipeClientProcessId(pipe, &pid) || !pid || pid == GetCurrentProcessId()) return NULL;
+    if (!GetNamedPipeClientProcessId(pipe, &pid) || !pid || pid == GetCurrentProcessId()) {
+        fprintf(stderr, "BROKER auth=client-pid error=%lu\n", GetLastError());
+        return NULL;
+    }
     HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE, FALSE, pid);
-    if (!process) return NULL;
+    if (!process) { fprintf(stderr, "BROKER auth=open-process pid=%lu error=%lu\n", pid, GetLastError()); return NULL; }
     BOOL member = FALSE;
     if (!IsProcessInJob(process, broker_job, &member) || !member) {
+        fprintf(stderr, "BROKER auth=job pid=%lu member=%d error=%lu\n", pid, member, GetLastError());
         CloseHandle(process);
         return NULL;
     }
@@ -80,6 +85,14 @@ static void open_null(const broker_request &request, const std::vector<BYTE> &ex
     attributes.Length = sizeof(attributes);
     attributes.ObjectName = &name;
     attributes.Attributes = request.object_attributes;
+    SECURITY_QUALITY_OF_SERVICE qos = {};
+    if (request.qos_present) {
+        qos.Length = request.qos_length;
+        qos.ImpersonationLevel = static_cast<SECURITY_IMPERSONATION_LEVEL>(request.qos_impersonation);
+        qos.ContextTrackingMode = static_cast<BOOLEAN>(request.qos_flags & 255);
+        qos.EffectiveOnly = static_cast<BOOLEAN>((request.qos_flags >> 8) & 255);
+        attributes.SecurityQualityOfService = &qos;
+    }
     LARGE_INTEGER allocation;
     allocation.QuadPart = request.allocation;
     IO_STATUS_BLOCK status = {};
@@ -96,6 +109,7 @@ static void open_null(const broker_request &request, const std::vector<BYTE> &ex
                               static_cast<ULONG>(extra.size()));
     }
     response->status = result;
+    response->io_status = status.Status;
     response->information = status.Information;
     if (result < 0) return;
     HANDLE remote = NULL;
@@ -119,8 +133,8 @@ static void final_path(const broker_request &request, HANDLE client, broker_resp
         DWORD size = GetFinalPathNameByHandleW(file, buffer.data(), static_cast<DWORD>(buffer.size()), request.flags);
         if (!size) { response->error = GetLastError(); break; }
         if (size >= buffer.size()) {
-            if (size >= 32768) { response->error = ERROR_FILENAME_EXCED_RANGE; break; }
-            buffer.resize(static_cast<size_t>(size) + 1);
+            if (size > 32768) { response->error = ERROR_FILENAME_EXCED_RANGE; break; }
+            buffer.resize(size);
             continue;
         }
         response->information = size;
@@ -162,13 +176,9 @@ static void serve(HANDLE pipe) {
     bool replied = transfer(pipe, &response, sizeof(response), true) &&
                    (output.empty() || transfer(pipe, output.data(), response.extra_size, true));
     BYTE acknowledged = 0;
-    replied = replied && transfer(pipe, &acknowledged, 1, false) && acknowledged == 1;
-    if (!replied && response.handle) {
-        HANDLE discarded = NULL;
-        if (DuplicateHandle(client, reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(response.handle)),
-                            GetCurrentProcess(), &discarded, 0, FALSE,
-                            DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)) CloseHandle(discarded);
-    }
+    if (replied) transfer(pipe, &acknowledged, 1, false);
+    /* Publication transfers ownership. Never close a client handle number after
+     * publication: the client might already have closed and reused its slot. */
     CloseHandle(client);
 }
 
@@ -192,8 +202,17 @@ static DWORD WINAPI worker(void *argument) {
 
 extern "C" void sandbox_stop_broker(void) {
     if (broker_stop) SetEvent(broker_stop);
+    for (unsigned i = 0; i < worker_count; ++i)
+        if (workers[i]) CancelSynchronousIo(workers[i]);
     for (unsigned i = 0; i < worker_count; ++i) {
-        if (workers[i]) { WaitForSingleObject(workers[i], INFINITE); CloseHandle(workers[i]); workers[i] = NULL; }
+        if (workers[i]) {
+            if (WaitForSingleObject(workers[i], broker_timeout) != WAIT_OBJECT_0) {
+                /* The supervisor owns --cleanup after helper failure. End this
+                 * process rather than leave a stuck native query alive. */
+                TerminateProcess(GetCurrentProcess(), 125);
+            }
+            CloseHandle(workers[i]); workers[i] = NULL;
+        }
         if (pipes[i] && pipes[i] != INVALID_HANDLE_VALUE) { CloseHandle(pipes[i]); pipes[i] = NULL; }
     }
     if (broker_stop) { CloseHandle(broker_stop); broker_stop = NULL; }

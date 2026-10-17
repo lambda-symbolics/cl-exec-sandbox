@@ -377,7 +377,8 @@ static HANDLE restricted_token(void) {
 }
 #ifdef CL_EXEC_SANDBOX_DIAGNOSTIC
 #ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
-extern BOOL sandbox_inject_null(HANDLE process);
+extern BOOL sandbox_inject_null(HANDLE process, const wchar_t *profile);
+extern BOOL sandbox_remove_null_alias(const wchar_t *profile);
 extern BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *profile);
 extern void sandbox_stop_broker(void);
 #endif
@@ -463,7 +464,7 @@ static DWORD launch(PSID sid, const wchar_t *profile, const wchar_t *cwd,
 #ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
     if (mode == 3) {
         require(sandbox_start_broker(job, sid, profile), L"start native compatibility broker");
-        require(sandbox_inject_null(process.hProcess), L"inject native compatibility client");
+        require(sandbox_inject_null(process.hProcess, profile), L"inject native compatibility client");
     }
 #endif
     require(ResumeThread(process.hThread) != (DWORD)-1, L"start contained process");
@@ -533,6 +534,9 @@ int wmain(int argc, wchar_t **argv) {
         HANDLE job = OpenJobObjectW(JOB_OBJECT_TERMINATE | JOB_OBJECT_QUERY, FALSE, name);
         free(name);
         if (job) { terminate_job(job); CloseHandle(job); }
+#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
+        require(sandbox_remove_null_alias(argv[2]), L"remove private import alias");
+#endif
         mutex = lock_acls();
         for (int i = start; i < end; i += 2)
             if (file_attributes(paths[(i - start) / 2]) != INVALID_FILE_ATTRIBUTES)
@@ -555,6 +559,9 @@ int wmain(int argc, wchar_t **argv) {
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 1, TRUE, 0);
         DWORD result = launch(sid, argv[2], argv[4], argc - end - 1, argv + end + 1);
+#ifdef CL_EXEC_SANDBOX_NULL_PROTOTYPE
+        require(sandbox_remove_null_alias(argv[2]), L"remove private import alias");
+#endif
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 2, TRUE, 0);
         check_hr(DeleteAppContainerProfile(argv[2]), L"delete AppContainer profile");

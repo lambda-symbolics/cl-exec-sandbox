@@ -21,6 +21,8 @@ $env:LOCALAPPDATA = Join-Path $root 'AppData/Local'
 $env:APPDATA = Join-Path $root 'AppData/Roaming'
 New-Item -ItemType Directory -Force -Path $workspace, $env:TEMP, $env:LOCALAPPDATA, $env:APPDATA | Out-Null
 
+$unexpected = [Collections.Generic.List[string]]::new()
+
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments)
     & $Program @Arguments
@@ -48,11 +50,11 @@ function Invoke-Probe {
             & $helper --cleanup $profile @rules
             if ($LASTEXITCODE -ne 0) { throw "Profile cleanup failed: $profile" }
         }
-        if ($status -eq 125) { throw "Native diagnostic launch failed for $Mode/$Name." }
+        if ($status -eq 125) { $script:unexpected.Add("Native diagnostic launch failed for $Mode/$Name.") }
     }
     Write-Host "RESULT mode=$Mode name=$Name exit=$status"
     if ($Expected -ge 0 -and $status -ne $Expected) {
-        throw "Unexpected result for $Mode/${Name}: got $status, expected $Expected."
+        $script:unexpected.Add("Unexpected result for $Mode/${Name}: got $status, expected $Expected.")
     }
 }
 
@@ -108,4 +110,10 @@ $env:PATH = $programs + [IO.Path]::PathSeparator + $env:PATH
 $env:CL_EXEC_SANDBOX_NULL_BASENAME = '1'
 Invoke-Probe 'combined-hook' 'unicode-nul' $child @('nul') -Expected 0
 Invoke-Probe 'combined-hook' 'unicode-descendant' $child @('nul-descendant') -Expected 0
+$env:CL_EXEC_SANDBOX_NULL_ALIAS = '1'
+$env:CL_EXEC_SANDBOX_NULL_BASENAME = '0'
+$env:PATH = Join-Path $env:SystemRoot 'System32'
+Invoke-Probe 'combined-hook' 'unicode-alias-nul' $child @('nul') -Expected 0
+Invoke-Probe 'combined-hook' 'unicode-alias-clean-environment' $child @('nul-descendant-clean-environment') -Expected 0
+if ($unexpected.Count) { throw ($unexpected -join [Environment]::NewLine) }
 exit 0

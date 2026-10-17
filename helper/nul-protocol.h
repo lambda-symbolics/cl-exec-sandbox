@@ -15,17 +15,19 @@ struct broker_request {
     uint32_t has_allocation, flags;
     int64_t allocation;
     uint64_t handle;
+    uint32_t qos_present, qos_length, qos_impersonation, qos_flags;
 };
 struct broker_response {
     uint32_t magic, version, error, extra_size;
     int32_t status;
-    uint32_t reserved;
+    int32_t io_status;
     uint64_t handle, information;
 };
 struct broker_payload {
     DWORD process_id;
     wchar_t pipe[256];
+    char library[32768];
 };
-static_assert(sizeof(broker_request) == 64, "Stable request layout");
+static_assert(sizeof(broker_request) == 80, "Stable request layout");
 static_assert(sizeof(broker_response) == 40, "Stable response layout");
 #endif

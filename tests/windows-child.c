@@ -91,14 +91,19 @@ static int probe_nul_security(void) {
     return (int)error;
 }
 
-static int probe_nul_descendant(void) {
+static int probe_nul_descendant(BOOL clean_environment) {
     wchar_t executable[32768], line[32768];
     if (!GetModuleFileNameW(NULL, executable, sizeof(executable) / sizeof(*executable))) return 99;
     if (swprintf(line, sizeof(line) / sizeof(*line), L"\"%ls\" nul", executable) < 0) return 99;
+    wchar_t environment[32768] = {0}, windows[32768];
+    if (clean_environment) {
+        if (!GetWindowsDirectoryW(windows, 32768) ||
+            swprintf(environment, 32767, L"SystemRoot=%ls", windows) < 0) return 99;
+    }
     STARTUPINFOW startup = {0}; PROCESS_INFORMATION process = {0};
     startup.cb = sizeof(startup);
-    if (!CreateProcessW(executable, line, NULL, NULL, FALSE, CREATE_NO_WINDOW,
-                        NULL, NULL, &startup, &process)) return (int)GetLastError();
+    if (!CreateProcessW(executable, line, NULL, NULL, FALSE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                        clean_environment ? environment : NULL, NULL, &startup, &process)) return (int)GetLastError();
     WaitForSingleObject(process.hProcess, INFINITE);
     DWORD status = 99;
     GetExitCodeProcess(process.hProcess, &status);
@@ -345,7 +350,8 @@ int wmain(int argc, wchar_t **argv) {
         return 0;
     }
     if (!wcscmp(argv[1], L"nul")) return probe_nul();
-    if (!wcscmp(argv[1], L"nul-descendant")) return probe_nul_descendant();
+    if (!wcscmp(argv[1], L"nul-descendant")) return probe_nul_descendant(FALSE);
+    if (!wcscmp(argv[1], L"nul-descendant-clean-environment")) return probe_nul_descendant(TRUE);
     if (!wcscmp(argv[1], L"nul-security")) return probe_nul_security();
     if (!wcscmp(argv[1], L"cwd")) return probe_cwd();
     if (!wcscmp(argv[1], L"nul-semantics")) return probe_nul_semantics();
