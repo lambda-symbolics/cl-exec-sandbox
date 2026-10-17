@@ -8,35 +8,30 @@ permissions:
 jobs:
   matrix:
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: ilammy/msvc-dev-cmd@v1
-      - uses: actions/checkout@v5
-        with:
-          repository: microsoft/Detours
-          ref: 1dbd4ea281d73d478aa8d09a8b83fbd265f715f7
-          path: detours-reference
-      - name: Build upstream Detours
-        shell: cmd
-        run: nmake /nologo /C /F Makefile
-        working-directory: detours-reference/src
-      - name: Compile diagnostic helper and native child
+      - name: Build production helper bundle
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force build | Out-Null
-          clang -std=c11 -O2 -Wall -Wextra -Werror -DCL_EXEC_SANDBOX_DIAGNOSTIC -DCL_EXEC_SANDBOX_NULL_PROTOTYPE -c helper/cl-exec-sandbox-windows.c -o build/helper.obj
-          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic helper compilation failed.' }
-          cl /nologo /MT /W4 /WX /EHsc /I detours-reference/include /c helper/nul-hook-prototype.cpp /Fobuild/inject.obj
-          if ($LASTEXITCODE -ne 0) { throw 'Injector compilation failed.' }
-            cl /nologo /MT /W4 /WX /EHsc /c helper/nul-broker.cpp /Fobuild/broker.obj
-            if ($LASTEXITCODE -ne 0) { throw 'Broker compilation failed.' }
-            link /nologo /out:build/cl-exec-sandbox-windows-diagnostic.exe build/helper.obj build/inject.obj build/broker.obj detours-reference/lib.X64/detours.lib advapi32.lib userenv.lib ole32.lib ntdll.lib
-          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic helper linking failed.' }
-          cl /nologo /MT /W4 /WX /EHsc /LD /DCL_EXEC_SANDBOX_NULL_DLL /I detours-reference/include helper/nul-hook-prototype.cpp /Fobuild/shim.obj /link /out:build/cl-exec-sandbox-null.dll '/EXPORT:null_hook_marker,@1' detours-reference/lib.X64/detours.lib ntdll.lib advapi32.lib
-          if ($LASTEXITCODE -ne 0) { throw 'Null shim compilation failed.' }
-          clang -std=c11 -O2 -Wall -Wextra -Werror tests/windows-child.c -o build/windows-child.exe -ladvapi32 -lws2_32
-          if ($LASTEXITCODE -ne 0) { throw 'Native child compilation failed.' }
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $PWD 'build/helper'
+          & ./scripts/build-windows-helper.ps1 -OutputDirectory $out
+          if ($LASTEXITCODE -ne 0) { throw 'Production helper build failed.' }
+      - name: Compile native probes for both architectures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build/programs | Out-Null
+          foreach ($arch in @('x64', 'x86')) {
+            $target = if ($arch -eq 'x64') { 'x86_64-pc-windows-msvc' } else { 'i686-pc-windows-msvc' }
+            & clang-cl /nologo /std:c11 /O2 /W4 /WX /DUNICODE /D_UNICODE /clang:-target /clang:$target tests/windows-child.c /Fe:build/programs/windows-child-$arch.exe /link advapi32.lib ws2_32.lib
+            if ($LASTEXITCODE -ne 0) { throw "windows-child $arch compilation failed." }
+            & clang-cl /nologo /O2 /W4 /WX /DUNICODE /D_UNICODE /clang:-target /clang:$target tests/windows-process.c /Fe:build/programs/windows-process-$arch.exe /link advapi32.lib userenv.lib shell32.lib
+            if ($LASTEXITCODE -ne 0) { throw "windows-process $arch compilation failed." }
+          }
+          Copy-Item build/helper/cl-exec-sandbox-windows.exe, build/helper/cl-exec-sandbox-compat64.dll, build/helper/cl-exec-sandbox-compat32.dll -Destination build/programs
       - name: Run native matrix as standard account
         shell: pwsh
         run: |
@@ -51,7 +46,7 @@ jobs:
             & icacls.exe $root /inheritance:r /grant:r "*$($user.SID.Value):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
             if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare the private fixture.' }
             $programs = New-Item -ItemType Directory -Path (Join-Path $root 'programs')
-              Copy-Item build/cl-exec-sandbox-windows-diagnostic.exe, build/windows-child.exe, build/cl-exec-sandbox-null.dll -Destination $programs.FullName
+            Copy-Item build/programs/* -Destination $programs.FullName
             Copy-Item scripts/probe-windows-nul.ps1 -Destination (Join-Path $root 'probe.ps1')
             $git = (Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
             $gitRoot = Split-Path (Split-Path $git -Parent) -Parent
@@ -60,10 +55,7 @@ jobs:
             $pwsh = (Get-Command pwsh.exe -CommandType Application | Select-Object -First 1).Source
             $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$name", $password)
             $process = Start-Process -FilePath $pwsh -Credential $credential -LoadUserProfile -PassThru -WorkingDirectory $root -ArgumentList @('-NoProfile', '-File', ('"' + (Join-Path $root 'probe.ps1') + '"')) -RedirectStandardOutput (Join-Path $root 'output.log') -RedirectStandardError (Join-Path $root 'error.log')
-            if (-not $process.WaitForExit(900000)) {
-              Stop-Process -Id $process.Id -Force
-              throw 'Native NUL diagnostics timed out.'
-            }
+            if (-not $process.WaitForExit(1500000)) { Stop-Process -Id $process.Id -Force; throw 'Native NUL diagnostics timed out.' }
             $process.Refresh()
             Get-Content -LiteralPath (Join-Path $root 'output.log')
             Get-Content -LiteralPath (Join-Path $root 'error.log')

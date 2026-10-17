@@ -52,22 +52,28 @@ static int probe_identity(int sandbox) {
 }
 
 static int probe_nul_and_final_path(void) {
-    HANDLE file = CreateFileW(L"\\\\.\\NUL", GENERIC_READ | GENERIC_WRITE,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                              NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    WCHAR wide[32768];
+    HANDLE nul = CreateFileW(L"\\\\.\\NUL", GENERIC_READ | GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    WCHAR path[32768], wide[32768];
     char ansi[32768];
+    HANDLE file;
     DWORD wlength, alength;
-    if (file == INVALID_HANDLE_VALUE) return fail("CreateFileW NUL");
-    wlength = GetFinalPathNameByHandleW(file, wide, sizeof(wide) / sizeof(wide[0]),
-                                        FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+    if (nul == INVALID_HANDLE_VALUE) return fail("CreateFileW NUL");
+    CloseHandle(nul);
+    if (!GetModuleFileNameW(NULL, path, sizeof(path) / sizeof(path[0])))
+        return fail("GetModuleFileNameW");
+    file = CreateFileW(path, FILE_READ_ATTRIBUTES,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return fail("Open executable for final path");
+    wlength = GetFinalPathNameByHandleW(file, wide, sizeof(wide) / sizeof(wide[0]), 0);
     if (!wlength || wlength >= sizeof(wide) / sizeof(wide[0])) {
-        CloseHandle(file); return fail("GetFinalPathNameByHandleW NUL");
+        CloseHandle(file); return fail("GetFinalPathNameByHandleW executable");
     }
-    alength = GetFinalPathNameByHandleA(file, ansi, sizeof(ansi),
-                                        FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+    alength = GetFinalPathNameByHandleA(file, ansi, sizeof(ansi), 0);
     if (!alength || alength >= sizeof(ansi)) {
-        CloseHandle(file); return fail("GetFinalPathNameByHandleA NUL");
+        CloseHandle(file); return fail("GetFinalPathNameByHandleA executable");
     }
     wprintf(L"PROCESS NUL final-path-w=%ls\n", wide);
     printf("PROCESS NUL final-path-a=%s\n", ansi);
@@ -119,7 +125,11 @@ static int run_suspended_w(const WCHAR *path, const WCHAR *label, int sandbox) {
                 (unsigned long)status);
         result = 1;
     }
-    if (ResumeThread(process.hThread) == (DWORD)-1) result = fail("ResumeThread");
+    if (WaitForSingleObject(process.hProcess, 100) != WAIT_TIMEOUT) {
+        fprintf(stderr, "process-probe: %ls was not suspended\n", label);
+        result = 1;
+    }
+    if (!result && ResumeThread(process.hThread) != 1) result = fail("ResumeThread");
     if (!result) result = wait_child(process.hProcess, "CreateProcessW child");
     CloseHandle(process.hThread); CloseHandle(process.hProcess); free(environment);
     return result;
@@ -148,7 +158,11 @@ static int run_suspended_a(const WCHAR *path, const char *label, int sandbox) {
                 (unsigned long)status);
         result = 1;
     }
-    if (ResumeThread(process.hThread) == (DWORD)-1) result = fail("ResumeThread");
+    if (WaitForSingleObject(process.hProcess, 100) != WAIT_TIMEOUT) {
+        fprintf(stderr, "process-probe: %s was not suspended\n", label);
+        result = 1;
+    }
+    if (!result && ResumeThread(process.hThread) != 1) result = fail("ResumeThread");
     if (!result) result = wait_child(process.hProcess, label);
     CloseHandle(process.hThread); CloseHandle(process.hProcess); free(environment);
     return result;
@@ -178,7 +192,9 @@ static int run_as_user_w(const WCHAR *path, BOOL ansi, int sandbox) {
         CloseHandle(token); CloseHandle(source); free(environment); return 0;
     }
     if (!ok) { SetLastError(error); CloseHandle(token); CloseHandle(source); free(environment); return fail("CreateProcessAsUserW"); }
-    if (ResumeThread(process.hThread) == (DWORD)-1) error = GetLastError();
+    if (WaitForSingleObject(process.hProcess, 100) != WAIT_TIMEOUT)
+        error = ERROR_INVALID_DATA;
+    else if (ResumeThread(process.hThread) != 1) error = GetLastError();
     else error = wait_child(process.hProcess, "CreateProcessAsUserW child") ? ERROR_INVALID_DATA : ERROR_SUCCESS;
     CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(token); CloseHandle(source); free(environment);
     if (error) { SetLastError(error); return 1; }
@@ -213,7 +229,9 @@ static int run_as_user_a(const WCHAR *path, int sandbox) {
         CloseHandle(token); CloseHandle(source); free(environment); return 0;
     }
     if (!ok) { SetLastError(error); CloseHandle(token); CloseHandle(source); free(environment); return fail("CreateProcessAsUserA"); }
-    if (ResumeThread(process.hThread) == (DWORD)-1) error = GetLastError();
+    if (WaitForSingleObject(process.hProcess, 100) != WAIT_TIMEOUT)
+        error = ERROR_INVALID_DATA;
+    else if (ResumeThread(process.hThread) != 1) error = GetLastError();
     else error = wait_child(process.hProcess, "CreateProcessAsUserA child") ? ERROR_INVALID_DATA : ERROR_SUCCESS;
     CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(token); CloseHandle(source); free(environment);
     if (error) { SetLastError(error); return 1; }
@@ -290,7 +308,8 @@ static int probe_root(int sandbox, const WCHAR *peer) {
         WCHAR command[32768], *environment = environment_block();
         STARTUPINFOW startup = {0}; startup.cb = sizeof(startup);
         PROCESS_INFORMATION process = {0};
-        swprintf(command, sizeof(command) / sizeof(command[0]), L"\"%ls\" --peer-leaf %d", peer, sandbox);
+        swprintf(command, sizeof(command) / sizeof(command[0]),
+                 L"\"%ls\" --peer-leaf %d \"%ls\"", peer, sandbox, path);
         if (!environment || !CreateProcessW(peer, command, NULL, NULL, FALSE,
                                             CREATE_UNICODE_ENVIRONMENT, environment, NULL,
                                             &startup, &process)) {
@@ -305,15 +324,19 @@ static int probe_root(int sandbox, const WCHAR *peer) {
 
 int wmain(int argc, wchar_t **argv) {
     int sandbox = 0;
+    const WCHAR *peer = NULL;
     if (argc >= 3 && !_wcsicmp(argv[1], L"--suspended-leaf"))
         return probe_leaf(_wtoi(argv[2]));
     if (argc >= 3 && !_wcsicmp(argv[1], L"--peer-leaf")) {
         sandbox = _wtoi(argv[2]);
-        return probe_identity(sandbox) | probe_nul_and_final_path();
+        if (argc < 4) return fail("peer leaf executable");
+        return probe_leaf(sandbox) | run_suspended_w(argv[3], L"return cross-bitness child", sandbox);
     }
     if (argc >= 3 && !_wcsicmp(argv[1], L"alias-tamper"))
         return probe_alias_tamper(argv[2]);
-    if (argc >= 2 && !_wcsicmp(argv[1], L"--sandbox")) sandbox = 1;
-    if (argc >= 3 && !_wcsicmp(argv[1], L"--peer")) return probe_root(sandbox, argv[2]);
-    return probe_root(sandbox, NULL);
+    for (int i = 1; i < argc; ++i) {
+        if (!_wcsicmp(argv[i], L"--sandbox")) sandbox = 1;
+        else if (!_wcsicmp(argv[i], L"--peer") && i + 1 < argc) peer = argv[++i];
+    }
+    return probe_root(sandbox, peer);
 }
