@@ -349,6 +349,12 @@ int wmain(int argc, wchar_t **argv) {
 
     if (argc < 3) return 99;
 
+    if (!wcscmp(argv[1], L"attributes")) {
+        DWORD attributes = GetFileAttributesW(argv[2]);
+        DWORD error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : 0;
+        wprintf(L"ATTR path=%ls error=%lu attributes=%lu\n", argv[2], error, attributes);
+        return (int)error;
+    }
     if (!wcscmp(argv[1], L"protect-acl")) {
         PSECURITY_DESCRIPTOR descriptor = NULL;
         PACL acl = NULL;

@@ -72,6 +72,55 @@ Invoke-Checked $git @('-C', $workspace, 'config', 'user.name', 'diagnostic')
 [IO.File]::WriteAllText((Join-Path $workspace 'tracked.txt'), 'fixture')
 Invoke-Checked $git @('-C', $workspace, 'add', 'tracked.txt')
 Invoke-Checked $git @('-C', $workspace, 'commit', '--quiet', '-m', 'fixture')
+# Isolate ancestor attribute rights with the same unmodified Git worktree operation.
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class ProbeSid {
+    [DllImport("userenv.dll", CharSet=CharSet.Unicode)]
+    public static extern int DeriveAppContainerSidFromAppContainerName(string name, out IntPtr sid);
+    [DllImport("advapi32.dll")] public static extern IntPtr FreeSid(IntPtr sid);
+}
+'@
+$checkoutContainer = Join-Path $root 'checkouts'
+New-Item -ItemType Directory -Path $checkoutContainer | Out-Null
+foreach ($mask in @(0, 128, 160)) {
+    $profile = (& $helper --new-profile).Trim()
+    $pointer = [IntPtr]::Zero
+    if ([ProbeSid]::DeriveAppContainerSidFromAppContainerName($profile, [ref]$pointer) -ne 0) { throw 'SID derivation failed.' }
+    $packageSid = [Security.Principal.SecurityIdentifier]::new($pointer)
+    [void][ProbeSid]::FreeSid($pointer)
+    $parts = $packageSid.Value -split '-'
+    $restrictingSid = [Security.Principal.SecurityIdentifier]::new(('S-1-5-21-' + ($parts[4..7] -join '-')))
+    $originalAcl = Get-Acl -LiteralPath $root
+    $beforeAcl = $originalAcl.Sddl
+    $rules = @('read', $programs, 'read', $gitRoot, 'write', $workspace, 'write', $checkoutContainer)
+    try {
+        if ($mask) {
+            foreach ($sid in @($packageSid, $restrictingSid)) {
+                $originalAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,
+                    [Security.AccessControl.FileSystemRights]$mask, 'None', 'None', 'Allow'))
+            }
+            Set-Acl -LiteralPath $root -AclObject $originalAcl
+        }
+        foreach ($path in @((Split-Path $root -Parent), $root, $checkoutContainer)) {
+            & $helper --run $profile isolated $workspace @rules -- $child attributes $path
+            Write-Host "ANCESTOR mask=$mask path=$path status=$LASTEXITCODE"
+        }
+        $destination = Join-Path $checkoutContainer "worktree-$mask"
+        & $helper --run $profile isolated $workspace @rules -- $git -C $workspace worktree add --detach $destination HEAD
+        $status = $LASTEXITCODE
+        Write-Host "WORKTREE mask=$mask status=$status"
+        if (($mask -eq 0 -and $status -ne 128) -or ($mask -ne 0 -and $status -ne 0)) {
+            $unexpected.Add("Ancestor control mask=$mask returned $status")
+        }
+    } finally {
+        & $helper --cleanup $profile @rules
+        $restored = [Security.AccessControl.DirectorySecurity]::new()
+        $restored.SetSecurityDescriptorSddlForm($beforeAcl)
+        Set-Acl -LiteralPath $root -AclObject $restored
+    }
+}
 $env:CL_SANDBOX_PROBE_GIT = $git
 $env:CL_SANDBOX_PROBE_WORKSPACE = $workspace
 $powerShellProbe = @'
