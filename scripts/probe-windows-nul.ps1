@@ -101,9 +101,9 @@ $attributeRules = @('read', $programs, 'write', $checkoutContainer)
 foreach ($payload in @($child, $childX86)) {
     foreach ($path in @('C:\', 'C:\Users', $root, $privateAncestor)) {
         foreach ($operation in @('attributes', 'attributes-ex')) {
-            $baseline = @(& $payload $operation $path)
+            $baseline = @(& $payload $operation $path 'unvirtualized')
             if ($LASTEXITCODE -ne 0) { throw 'Ordinary ancestor attribute control failed.' }
-            $contained = @(Invoke-AncestorCommand "$operation/$path" $payload @($operation, $path) $attributeRules)
+            $contained = @(Invoke-AncestorCommand "$operation/$path" $payload @($operation, $path, 'unvirtualized') $attributeRules)
             if (($baseline -join "`n") -cne ($contained -join "`n")) {
                 Write-Host "ATTRIBUTE-MISMATCH payload=$payload baseline=$($baseline -join '|') contained=$($contained -join '|')"
                 $unexpected.Add("Ancestor $operation did not return real host metadata for $path")
@@ -169,9 +169,7 @@ try {
         foreach ($locationMode in @('native', 'drive')) {
             $env:CL_SANDBOX_PROBE_LOCATION = $locationMode
             foreach ($mode in @('ordinary-user', 'production-sandbox')) {
-                $expected = 0
-                if ($mode -eq 'production-sandbox' -and $locationMode -eq 'native') { $expected = 91 }
-                Invoke-Probe $mode "winps-git-$moduleMode-$locationMode" $windowsPowerShell @('-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', $encodedPowerShellProbe) -Expected $expected
+                Invoke-Probe $mode "winps-git-$moduleMode-$locationMode" $windowsPowerShell @('-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-EncodedCommand', $encodedPowerShellProbe) -Expected 0
             }
         }
     }

@@ -349,6 +349,28 @@ int wmain(int argc, wchar_t **argv) {
 
     if (argc < 3) return 99;
 
+    /* Legacy 32-bit ordinary processes otherwise receive UAC virtual-store
+     * flags. AppContainer tokens have virtualization disabled. Compare native
+     * metadata under the same nonvirtualized setting without changing the host. */
+    if (argc == 4 && !wcscmp(argv[3], L"unvirtualized") &&
+        (!wcscmp(argv[1], L"attributes") || !wcscmp(argv[1], L"attributes-ex"))) {
+        HANDLE token;
+        DWORD enabled = 0, size;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return (int)GetLastError();
+        BOOL ok = GetTokenInformation(token, TokenVirtualizationEnabled, &enabled, sizeof(enabled), &size);
+        DWORD error = ok ? 0 : GetLastError();
+        CloseHandle(token);
+        if (error) return (int)error;
+        if (enabled) {
+            if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_DEFAULT, &token)) return (int)GetLastError();
+            enabled = FALSE;
+            ok = SetTokenInformation(token, TokenVirtualizationEnabled, &enabled, sizeof(enabled));
+            error = ok ? 0 : GetLastError();
+            CloseHandle(token);
+            if (error) return (int)error;
+            fputs("Attribute control disabled legacy token virtualization.\n", stderr);
+        }
+    }
     if (!wcscmp(argv[1], L"attributes")) {
         DWORD attributes = GetFileAttributesW(argv[2]);
         DWORD error = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : 0;
