@@ -1,0 +1,5 @@
+name=Detours
+version=4.0.1
+commit=1dbd4ea281d73d478aa8d09a8b83fbd265f715f7
+archive=https://github.com/microsoft/Detours/archive/1dbd4ea281d73d478aa8d09a8b83fbd265f715f7.tar.gz
+sha256=38d435d2750b4e3af57f56c77af52bc058123c5e7dd734945b7680ec52e5c91c
