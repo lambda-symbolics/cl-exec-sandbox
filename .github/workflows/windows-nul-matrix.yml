@@ -19,19 +19,31 @@ jobs:
           $out = Join-Path $PWD 'build/helper'
           & ./scripts/build-windows-helper.ps1 -OutputDirectory $out
           if ($LASTEXITCODE -ne 0) { throw 'Production helper build failed.' }
-      - name: Compile native probes for both architectures
+      - name: Compile native x64 probes
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force build/programs | Out-Null
-          foreach ($arch in @('x64', 'x86')) {
-            $target = if ($arch -eq 'x64') { 'x86_64-pc-windows-msvc' } else { 'i686-pc-windows-msvc' }
-            & clang-cl /nologo /std:c11 /O2 /W4 /WX /DUNICODE /D_UNICODE /clang:-target /clang:$target tests/windows-child.c /Fe:build/programs/windows-child-$arch.exe /link advapi32.lib ws2_32.lib
-            if ($LASTEXITCODE -ne 0) { throw "windows-child $arch compilation failed." }
-            & clang-cl /nologo /O2 /W4 /WX /DUNICODE /D_UNICODE /clang:-target /clang:$target tests/windows-process.c /Fe:build/programs/windows-process-$arch.exe /link advapi32.lib userenv.lib shell32.lib
-            if ($LASTEXITCODE -ne 0) { throw "windows-process $arch compilation failed." }
-          }
-          Copy-Item build/helper/cl-exec-sandbox-windows.exe, build/helper/cl-exec-sandbox-compat64.dll, build/helper/cl-exec-sandbox-compat32.dll -Destination build/programs
+          & clang-cl --target=x86_64-pc-windows-msvc /nologo /std:c11 /O2 /MT /W4 /WX /D_CRT_SECURE_NO_WARNINGS tests/windows-child.c /Fobuild/programs/child64.obj /Fe:build/programs/windows-child-x64.exe /link advapi32.lib ws2_32.lib
+          if ($LASTEXITCODE -ne 0) { throw 'windows-child x64 compilation failed.' }
+          & clang-cl --target=x86_64-pc-windows-msvc /nologo /std:c11 /O2 /MT /W4 /WX /D_CRT_SECURE_NO_WARNINGS tests/windows-process.c /Fobuild/programs/process64.obj /Fe:build/programs/windows-process-x64.exe /link advapi32.lib userenv.lib shell32.lib
+          if ($LASTEXITCODE -ne 0) { throw 'windows-process x64 compilation failed.' }
+          & clang-cl --target=x86_64-pc-windows-msvc /nologo /std:c11 /O2 /MT /W4 /WX tests/windows-native.c /Fobuild/programs/native64.obj /Fe:build/programs/windows-native-x64.exe
+          if ($LASTEXITCODE -ne 0) { throw 'windows-native x64 compilation failed.' }
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+      - name: Compile native x86 probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & clang-cl --target=i686-pc-windows-msvc /nologo /std:c11 /O2 /MT /W4 /WX /D_CRT_SECURE_NO_WARNINGS tests/windows-child.c /Fobuild/programs/child32.obj /Fe:build/programs/windows-child-x86.exe /link advapi32.lib ws2_32.lib
+          if ($LASTEXITCODE -ne 0) { throw 'windows-child x86 compilation failed.' }
+          & clang-cl --target=i686-pc-windows-msvc /nologo /std:c11 /O2 /MT /W4 /WX /D_CRT_SECURE_NO_WARNINGS tests/windows-process.c /Fobuild/programs/process32.obj /Fe:build/programs/windows-process-x86.exe /link advapi32.lib userenv.lib shell32.lib
+          if ($LASTEXITCODE -ne 0) { throw 'windows-process x86 compilation failed.' }
+          & clang-cl --target=i686-pc-windows-msvc /nologo /std:c11 /O2 /MT /W4 /WX tests/windows-native.c /Fobuild/programs/native32.obj /Fe:build/programs/windows-native-x86.exe
+          if ($LASTEXITCODE -ne 0) { throw 'windows-native x86 compilation failed.' }
+          Copy-Item build/helper/* -Destination build/programs
       - name: Run native matrix as standard account
         shell: pwsh
         run: |

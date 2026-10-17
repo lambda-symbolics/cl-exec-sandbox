@@ -13,6 +13,8 @@ $gitRoot = Join-Path $root 'git'
 $helper = Join-Path $programs 'cl-exec-sandbox-windows.exe'
 $child = Join-Path $programs 'windows-child-x64.exe'
 $processProbe = Join-Path $programs 'windows-process-x64.exe'
+$childX86 = Join-Path $programs 'windows-child-x86.exe'
+$processProbeX86 = Join-Path $programs 'windows-process-x86.exe'
 $git = Join-Path $gitRoot 'cmd/git.exe'
 $env:TEMP = Join-Path $root 'temp'
 $env:TMP = $env:TEMP
@@ -32,10 +34,11 @@ function Invoke-Checked {
 
 function Invoke-Probe {
     param([string]$Mode, [string]$Name, [string]$Program, [string[]]$Arguments,
-          [int]$Expected = -1)
+          [int]$Expected = -1, [switch]$Capture)
     Write-Host "PROBE mode=$Mode name=$Name"
     if ($Mode -eq 'ordinary-user') {
-        & $Program @Arguments
+        if ($Capture) { $captured = @(& $Program @Arguments) }
+        else { & $Program @Arguments }
         $status = $LASTEXITCODE
     } else {
         $profile = (& $helper --new-profile).Trim()
@@ -47,7 +50,8 @@ function Invoke-Probe {
             $_ -replace '@PROFILE@', $profile
         })
         try {
-            & $helper --run $profile isolated $workspace @rules -- $Program @actualArguments
+            if ($Capture) { $captured = @(& $helper --run $profile isolated $workspace @rules -- $Program @actualArguments) }
+            else { & $helper --run $profile isolated $workspace @rules -- $Program @actualArguments }
             $status = $LASTEXITCODE
         } finally {
             & $helper --cleanup $profile @rules
@@ -58,6 +62,7 @@ function Invoke-Probe {
     if ($Expected -ge 0 -and $status -ne $Expected) {
         $script:unexpected.Add("Unexpected result for $Mode/${Name}: got $status, expected $Expected.")
     }
+    if ($Capture) { return $captured }
 }
 
 Invoke-Checked $git @('-C', $workspace, 'init', '--quiet')
@@ -68,18 +73,36 @@ Invoke-Checked $git @('-C', $workspace, 'add', 'tracked.txt')
 Invoke-Checked $git @('-C', $workspace, 'commit', '--quiet', '-m', 'fixture')
 foreach ($mode in @('ordinary-user', 'production-sandbox')) {
     Invoke-Probe $mode 'nul-security' $child @('nul-security')
-    $expected = if ($mode -eq 'ordinary-user') { 0 } else { -1 }
-    Invoke-Probe $mode 'nul' $child @('nul') -Expected $expected
-    Invoke-Probe $mode 'nul-descendant' $child @('nul-descendant') -Expected $expected
-    Invoke-Probe $mode 'cwd' $child @('cwd')
-    Invoke-Probe $mode 'git-status' $git @('-C', $workspace, 'status', '--porcelain') -Expected $expected
-    Invoke-Probe $mode 'git-rev-parse' $git @('-C', $workspace, 'rev-parse', '--show-toplevel') -Expected $expected
-}
-foreach ($mode in @('ordinary-user', 'production-sandbox')) {
+    Invoke-Probe $mode 'nul' $child @('nul') -Expected 0
+    Invoke-Probe $mode 'nul-descendant' $child @('nul-descendant') -Expected 0
+    Invoke-Probe $mode 'cwd' $child @('cwd') -Expected 0
+    Invoke-Probe $mode 'git-status' $git @('-C', $workspace, 'status', '--porcelain') -Expected 0
+    Invoke-Probe $mode 'git-rev-parse' $git @('-C', $workspace, 'rev-parse', '--show-toplevel') -Expected 0
     Invoke-Probe $mode 'nul-semantics' $child @('nul-semantics') -Expected 0
     Invoke-Probe $mode 'final-path-semantics' $child @('final-path-semantics') -Expected 0
-    Invoke-Probe $mode 'process-x64-to-x86' $processProbe @('--peer', (Join-Path $programs 'windows-process-x86.exe')) -Expected 0
-    Invoke-Probe $mode 'process-x86-to-x64' $processProbeX86 @('--peer', (Join-Path $programs 'windows-process-x64.exe')) -Expected 0
+    Invoke-Probe $mode 'nul-x86' $childX86 @('nul') -Expected 0
+    Invoke-Probe $mode 'nul-semantics-x86' $childX86 @('nul-semantics') -Expected 0
+    Invoke-Probe $mode 'final-path-semantics-x86' $childX86 @('final-path-semantics') -Expected 0
+    $processOptions = @()
+    if ($mode -eq 'production-sandbox') { $processOptions += '--sandbox' }
+    Invoke-Probe $mode 'process-x64-to-x86' $processProbe ($processOptions + @('--peer', $processProbeX86)) -Expected 0
+    Invoke-Probe $mode 'process-x86-to-x64' $processProbeX86 ($processOptions + @('--peer', $processProbe)) -Expected 0
+}
+Invoke-Probe 'production-sandbox' 'appcontainer-identity-x86' $childX86 @('identity') -Expected 0
+foreach ($arch in @('x64', 'x86')) {
+    $native = Join-Path $programs "windows-native-$arch.exe"
+    $baseline = @(Invoke-Probe 'ordinary-user' "native-outputs-$arch" $native @() -Expected 0 -Capture)
+    $contained = @(Invoke-Probe 'production-sandbox' "native-outputs-$arch" $native @() -Expected 0 -Capture)
+    $baseline | ForEach-Object { Write-Host "NATIVE $arch $_" }
+    foreach ($api in @('NtCreateFile', 'NtOpenFile')) {
+        if (-not ($baseline -match "^api=$api case=control status=0x00000000 file=valid ")) {
+            throw "The ordinary $arch $api control did not open Null."
+        }
+    }
+    if ([string]::Join("`n", [string[]]$baseline) -cne [string]::Join("`n", [string[]]$contained)) {
+        $contained | ForEach-Object { Write-Host "CONTAINED $arch $_" }
+        throw "Native output semantics differ inside the $arch sandbox."
+    }
 }
 Invoke-Probe 'production-sandbox' 'alias-tamper' $processProbe @('alias-tamper', '@PROFILE@') -Expected 0
 $outside = Join-Path $root 'outside'
@@ -106,8 +129,8 @@ if (Test-Path -LiteralPath $delayed) { throw 'A sandbox descendant survived the 
 $originalPrograms = $programs
 $programs = Join-Path $root 'programs žluťoučký 日本'
 New-Item -ItemType Directory -Path $programs | Out-Null
-foreach ($name in @('cl-exec-sandbox-windows.exe', 'windows-child-x64.exe',
-                   'windows-process-x64.exe', 'windows-process-x86.exe',
+foreach ($name in @('cl-exec-sandbox-windows.exe', 'windows-child-x64.exe', 'windows-child-x86.exe',
+                   'windows-process-x64.exe', 'windows-process-x86.exe', 'LICENSE-Detours.txt',
                    'cl-exec-sandbox-compat64.dll', 'cl-exec-sandbox-compat32.dll')) {
     Copy-Item -LiteralPath (Join-Path $originalPrograms $name) -Destination $programs
 }

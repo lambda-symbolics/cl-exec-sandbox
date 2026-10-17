@@ -60,6 +60,9 @@ static int probe_nul_and_final_path(void) {
     HANDLE file;
     DWORD wlength, alength;
     if (nul == INVALID_HANDLE_VALUE) return fail("CreateFileW NUL");
+    if (GetFileType(nul) != FILE_TYPE_CHAR) {
+        CloseHandle(nul); return fail("NUL is not a character device");
+    }
     CloseHandle(nul);
     if (!GetModuleFileNameW(NULL, path, sizeof(path) / sizeof(path[0])))
         return fail("GetModuleFileNameW");

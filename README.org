@@ -50,11 +50,29 @@ can set =CL_EXEC_SANDBOX_SEATBELT= to an absolute executable path.
 
 The experimental Windows backend combines a fresh AppContainer identity with
 an invocation-specific restricted-token SID for deny rules and a kill-on-close
-Job Object for descendants. Run it as a standard Windows user. Build
-=scripts/build-windows-helper.ps1= from a Visual Studio SDK developer shell
-with Clang installed, then ship
-=build/cl-exec-sandbox-windows.exe= beside the Lisp sources. Alternatively, set
-=CL_EXEC_SANDBOX_WINDOWS_HELPER= to its absolute path outside writable scopes.
+Job Object for descendants. Run it as a standard Windows user on x86-64 Windows.
+
+Build =scripts/build-windows-helper.ps1= with the Visual Studio C++ tools, Windows
+SDK, and Clang installed. The builder acquires the Detours revision and archive
+hash in =scripts/windows-dependency.lock= and builds both client architectures.
+Ship these four adjacent files from =build/= beside the Lisp sources:
+
+- =cl-exec-sandbox-windows.exe=
+- =cl-exec-sandbox-compat64.dll=
+- =cl-exec-sandbox-compat32.dll=
+- =LICENSE-Detours.txt=
+
+Alternatively, set =CL_EXEC_SANDBOX_WINDOWS_HELPER= to the executable's absolute
+path outside writable scopes, with the other three files beside it. Pass
+=-OutputDirectory= to build into a new destination directory.
+
+For native program compatibility, the helper injects an architecture-matching
+Detours client before resuming the command and its documented Win32 process
+creation calls. The client retries denied canonical Null opens through a private
+broker, which opens the real device separately for each request. It also retries
+final-path queries using handles already owned by the caller. A per-invocation
+DOS-device alias permits DLL loading from Unicode installation paths. Runtime
+use requires no administrator setup.
 
 Use =appcontainer-sandbox-policy= with explicit existing =:read-roots= and
 =:workspace-roots=. Include the command's binaries and dependencies in the read
