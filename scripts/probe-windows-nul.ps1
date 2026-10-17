@@ -116,9 +116,12 @@ foreach ($mask in @(0, 128, 160)) {
         }
     } finally {
         & $helper --cleanup $profile @rules
-        $restored = Get-Acl -LiteralPath $root
-        $restored.SetSecurityDescriptorSddlForm($beforeAcl, [Security.AccessControl.AccessControlSections]::Access)
-        Set-Acl -LiteralPath $root -AclObject $restored
+        if ($mask) {
+            $restored = Get-Acl -LiteralPath $root
+            foreach ($sid in @($packageSid, $restrictingSid)) { $restored.PurgeAccessRules($sid) }
+            Set-Acl -LiteralPath $root -AclObject $restored
+        }
+        if ((Get-Acl -LiteralPath $root).Sddl -ne $beforeAcl) { throw 'Ancestor DACL cleanup mismatch.' }
     }
 }
 $env:CL_SANDBOX_PROBE_GIT = $git
