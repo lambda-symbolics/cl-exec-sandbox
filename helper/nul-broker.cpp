@@ -1,5 +1,5 @@
 /* Native compatibility broker, owned by the existing ordinary-user helper.
- * Only real Null opens and final-path queries on caller-owned handles cross it.
+ * Real Null opens, client-owned final paths and pinned scope-ancestor attributes cross it.
  * Pipe waits are cancellable; a stalled client cannot delay helper shutdown. */
 #define UNICODE
 #define _UNICODE
@@ -21,6 +21,84 @@ static broker_payload endpoint;
 typedef NTSTATUS (NTAPI *open_file_type)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
                                         PIO_STATUS_BLOCK, ULONG, ULONG);
 static open_file_type native_open;
+
+struct ancestor_entry {
+    std::wstring path;
+    HANDLE handle;
+};
+static std::vector<ancestor_entry> ancestors;
+
+/* Pin exact lexical ancestors before granting scopes. Never follow a reparse
+ * point or expose a path covered by an explicit deny rule. The C policy walker
+ * has already pinned and validated this same ancestry without delete sharing. */
+extern "C" BOOL sandbox_prepare_ancestors(unsigned count, wchar_t **paths, const wchar_t **kinds) {
+    for (unsigned rule = 0; rule < count; ++rule) {
+        if (!wcscmp(kinds[rule], L"deny")) continue;
+        std::wstring path(paths[rule]);
+        for (size_t length = 3; length < path.size(); ++length) {
+            if (length != 3 && path[length] != L'\\') continue;
+            std::wstring prefix = path.substr(0, length);
+            bool excluded = false;
+            for (unsigned other = 0; other < count; ++other) {
+                size_t n = wcslen(paths[other]);
+                if (!wcscmp(kinds[other], L"deny") && prefix.size() >= n &&
+                    !_wcsnicmp(prefix.c_str(), paths[other], n) &&
+                    (prefix.size() == n || prefix[n] == L'\\')) excluded = true;
+            }
+            for (const auto &entry : ancestors)
+                if (!_wcsicmp(entry.path.c_str(), prefix.c_str())) excluded = true;
+            if (excluded) continue;
+            std::wstring native = L"\\\\?\\" + prefix;
+            HANDLE handle = CreateFileW(native.c_str(), FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+            if (handle == INVALID_HANDLE_VALUE) return FALSE;
+            BY_HANDLE_FILE_INFORMATION information;
+            if (!GetFileInformationByHandle(handle, &information)) { CloseHandle(handle); return FALSE; }
+            if (!(information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+                (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                CloseHandle(handle); SetLastError(ERROR_REPARSE_TAG_INVALID); return FALSE;
+            }
+            ancestors.push_back({prefix, handle});
+        }
+    }
+    return TRUE;
+}
+
+/* A request cannot select arbitrary host metadata. Only exact canonical DOS
+ * ancestors registered above match; aliases, relative paths and dot components
+ * do not match. Attribute data comes from the pinned object, not a reopened path. */
+static void ancestor_attributes(const std::vector<BYTE> &extra, broker_response *response,
+                                std::vector<BYTE> *output) {
+    if (extra.size() < 2 * sizeof(wchar_t) || extra.size() % sizeof(wchar_t)) {
+        response->error = ERROR_INVALID_DATA; return;
+    }
+    std::wstring path(extra.size() / sizeof(wchar_t), L'\0');
+    memcpy(&path[0], extra.data(), extra.size());
+    if (path.back() || path.find(L'\0') != path.size() - 1) {
+        response->error = ERROR_INVALID_DATA; return;
+    }
+    path.pop_back();
+    for (auto &character : path) if (character == L'/') character = L'\\';
+    if (path.compare(0, 4, L"\\\\?\\") == 0) path.erase(0, 4);
+    if (path.size() > 3 && path.back() == L'\\') path.pop_back();
+    for (const auto &entry : ancestors) {
+        if (_wcsicmp(path.c_str(), entry.path.c_str())) continue;
+        response->information = 1;
+        BY_HANDLE_FILE_INFORMATION information;
+        if (!GetFileInformationByHandle(entry.handle, &information)) {
+            response->error = GetLastError(); return;
+        }
+        WIN32_FILE_ATTRIBUTE_DATA data = {information.dwFileAttributes,
+            information.ftCreationTime, information.ftLastAccessTime, information.ftLastWriteTime,
+            information.nFileSizeHigh, information.nFileSizeLow};
+        output->resize(sizeof(data));
+        memcpy(output->data(), &data, sizeof(data));
+        response->extra_size = static_cast<uint32_t>(output->size());
+        return;
+    }
+    response->error = ERROR_ACCESS_DENIED;
+}
 
 /* Finish or cancel every OVERLAPPED before releasing its buffers and event. */
 static bool complete_io(HANDLE pipe, OVERLAPPED *operation, BOOL started, DWORD *bytes) {
@@ -172,6 +250,9 @@ static void serve(HANDLE pipe) {
             if (!extra.empty()) response.error = ERROR_INVALID_DATA;
             else final_path(request, client, &response, &output);
             break;
+        case broker_ancestor_attributes:
+            ancestor_attributes(extra, &response, &output);
+            break;
         default: response.error = ERROR_INVALID_FUNCTION;
         }
     } else response.error = ERROR_INVALID_DATA;
@@ -219,6 +300,8 @@ extern "C" void sandbox_stop_broker(void) {
     }
     if (broker_stop) { CloseHandle(broker_stop); broker_stop = NULL; }
     if (pipe_security) { LocalFree(pipe_security); pipe_security = NULL; }
+    for (const auto &entry : ancestors) CloseHandle(entry.handle);
+    ancestors.clear();
 }
 
 /* The AppContainer check and the ordinary/restricted-token checks both need a

@@ -1,4 +1,4 @@
-/* Fixed-width Windows client/broker protocol. No client filesystem path RPC. */
+/* Fixed-width Windows client/broker protocol. Attribute RPCs match pinned ancestors only. */
 #ifndef CL_EXEC_SANDBOX_NULL_PROTOCOL_H
 #define CL_EXEC_SANDBOX_NULL_PROTOCOL_H
 #include <windows.h>
@@ -7,10 +7,12 @@
 #include <stdint.h>
 
 static const uint32_t broker_magic = 0x4e554c42;
-static const uint32_t broker_version = 1;
+static const uint32_t broker_version = 2;
 static const uint32_t broker_max_extra = 65536;
 static const DWORD broker_timeout = 10000;
-enum broker_operation : uint32_t { broker_create_null = 1, broker_open_null, broker_final_path };
+enum broker_operation : uint32_t {
+    broker_create_null = 1, broker_open_null, broker_final_path, broker_ancestor_attributes
+};
 
 struct broker_request {
     uint32_t magic, version, operation, extra_size;

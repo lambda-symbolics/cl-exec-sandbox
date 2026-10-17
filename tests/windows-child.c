@@ -372,26 +372,6 @@ int wmain(int argc, wchar_t **argv) {
         FindClose(search);
         return 0;
     }
-    if (!wcscmp(argv[1], L"ancestor-grant")) {
-        if (argc != 5) return 99;
-        PSID sid = NULL;
-        if (!ConvertStringSidToSidW(argv[3], &sid)) return (int)GetLastError();
-        DWORD mask = wcstoul(argv[4], NULL, 10);
-        EXPLICIT_ACCESSW entry = {0};
-        entry.grfAccessPermissions = mask;
-        entry.grfAccessMode = mask ? GRANT_ACCESS : REVOKE_ACCESS;
-        entry.grfInheritance = NO_INHERITANCE;
-        BuildTrusteeWithSidW(&entry.Trustee, sid);
-        PSECURITY_DESCRIPTOR descriptor = NULL;
-        PACL original = NULL, changed = NULL;
-        DWORD error = GetNamedSecurityInfoW(argv[2], SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                            NULL, NULL, &original, NULL, &descriptor);
-        if (!error) error = SetEntriesInAclW(1, &entry, original, &changed);
-        if (!error) error = SetNamedSecurityInfoW(argv[2], SE_FILE_OBJECT,
-                                  DACL_SECURITY_INFORMATION, NULL, NULL, changed, NULL);
-        LocalFree(changed); LocalFree(descriptor); LocalFree(sid);
-        return (int)error;
-    }
     if (!wcscmp(argv[1], L"protect-acl")) {
         PSECURITY_DESCRIPTOR descriptor = NULL;
         PACL acl = NULL;

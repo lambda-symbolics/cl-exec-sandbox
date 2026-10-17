@@ -1,5 +1,5 @@
 /* AppContainer enforces access policy. The ordinary-user helper brokers
- * canonical Null opens and final paths on client-owned file handles. */
+ * Null opens, client-owned final paths and exact pinned scope-ancestor attributes. */
 #define UNICODE
 #define _UNICODE
 #define _WIN32_WINNT 0x0A00
@@ -33,6 +33,8 @@ struct process_creation_scope {
 };
 static decltype(&GetFinalPathNameByHandleW) real_final_path = GetFinalPathNameByHandleW;
 static decltype(&GetFinalPathNameByHandleA) real_final_path_a = GetFinalPathNameByHandleA;
+static decltype(&GetFileAttributesW) real_attributes = GetFileAttributesW;
+static decltype(&GetFileAttributesExW) real_attributes_ex = GetFileAttributesExW;
 
 static bool transfer(HANDLE pipe, void *buffer, DWORD size, bool writing) {
     BYTE *cursor = static_cast<BYTE *>(buffer);
@@ -106,6 +108,52 @@ static bool broker_call(broker_request *request, const void *extra, broker_respo
     if (!ok) trace_failure("exchange", GetLastError());
     CloseHandle(pipe);
     return ok;
+}
+
+/* Git's mingw_lstat uses GetFileAttributesExW. Retry denied W attribute
+ * probes only; ordinary opens, enumeration and every other path use the OS. */
+static bool broker_attributes(LPCWSTR path, WIN32_FILE_ATTRIBUTE_DATA *data, DWORD *error) {
+    if (!path) return false;
+    size_t length = wcslen(path);
+    if (length >= broker_max_extra / sizeof(wchar_t)) return false;
+    broker_request request = {};
+    request.operation = broker_ancestor_attributes;
+    request.extra_size = static_cast<uint32_t>((length + 1) * sizeof(wchar_t));
+    broker_response response = {};
+    std::vector<BYTE> output;
+    if (!broker_call(&request, path, &response, &output) || !response.information) return false;
+    *error = response.error;
+    if (response.error) return true;
+    if (output.size() != sizeof(*data)) return false;
+    memcpy(data, output.data(), sizeof(*data));
+    return true;
+}
+
+static DWORD WINAPI hook_attributes(LPCWSTR path) {
+    DWORD saved = GetLastError();
+    DWORD result = real_attributes(path);
+    if (result != INVALID_FILE_ATTRIBUTES || GetLastError() != ERROR_ACCESS_DENIED) return result;
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    DWORD error = ERROR_ACCESS_DENIED;
+    if (broker_attributes(path, &data, &error) && !error) {
+        SetLastError(saved); return data.dwFileAttributes;
+    }
+    SetLastError(error);
+    return INVALID_FILE_ATTRIBUTES;
+}
+
+static BOOL WINAPI hook_attributes_ex(LPCWSTR path, GET_FILEEX_INFO_LEVELS level, LPVOID output) {
+    DWORD saved = GetLastError();
+    BOOL result = real_attributes_ex(path, level, output);
+    if (result || GetLastError() != ERROR_ACCESS_DENIED || level != GetFileExInfoStandard || !output)
+        return result;
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    DWORD error = ERROR_ACCESS_DENIED;
+    if (broker_attributes(path, &data, &error) && !error) {
+        memcpy(output, &data, sizeof(data)); SetLastError(saved); return TRUE;
+    }
+    SetLastError(error);
+    return FALSE;
 }
 
 
@@ -324,6 +372,8 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     if (!error) error = DetourAttach(&real_open_file, hook_open_file);
     if (!error) error = DetourAttach(&real_final_path, hook_final_path);
     if (!error) error = DetourAttach(&real_final_path_a, hook_final_path_a);
+    if (!error) error = DetourAttach(&real_attributes, hook_attributes);
+    if (!error) error = DetourAttach(&real_attributes_ex, hook_attributes_ex);
     if (!error) error = DetourAttach(&real_create_process_w, hook_create_process_w);
     if (!error) error = DetourAttach(&real_create_process_a, hook_create_process_a);
     if (!error) error = DetourAttach(&real_as_user_w, hook_as_user_w);

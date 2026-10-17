@@ -72,56 +72,58 @@ Invoke-Checked $git @('-C', $workspace, 'config', 'user.name', 'diagnostic')
 [IO.File]::WriteAllText((Join-Path $workspace 'tracked.txt'), 'fixture')
 Invoke-Checked $git @('-C', $workspace, 'add', 'tracked.txt')
 Invoke-Checked $git @('-C', $workspace, 'commit', '--quiet', '-m', 'fixture')
-# Isolate ancestor attribute rights with the same unmodified Git worktree operation.
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class ProbeSid {
-    [DllImport("userenv.dll", CharSet=CharSet.Unicode)]
-    public static extern int DeriveAppContainerSidFromAppContainerName(string name, out IntPtr sid);
-    [DllImport("advapi32.dll")] public static extern IntPtr FreeSid(IntPtr sid);
-}
-'@
-$checkoutContainer = Join-Path $root 'checkouts'
-New-Item -ItemType Directory -Path $checkoutContainer | Out-Null
-foreach ($mask in @(0, 128, 160)) {
+# Git walks absolute ancestors with GetFileAttributesExW before creating .git.
+$privateAncestor = Join-Path $root ('private-tree/' + [Guid]::NewGuid().ToString('N'))
+$checkoutContainer = Join-Path $privateAncestor 'data/task-worktrees/checkouts'
+$unrelated = Join-Path $root 'unrelated-attributes'
+$deniedAncestor = Join-Path $root 'denied-ancestor'
+$deniedInner = Join-Path $deniedAncestor 'allowed'
+New-Item -ItemType Directory -Force -Path $checkoutContainer, $unrelated, $deniedInner | Out-Null
+$ancestorAcl = (Get-Acl -LiteralPath $root).Sddl
+
+function Invoke-AncestorCommand {
+    param([string]$Name, [string]$Program, [string[]]$Arguments, [string[]]$Rules,
+          [int]$Expected = 0)
     $profile = (& $helper --new-profile).Trim()
-    $pointer = [IntPtr]::Zero
-    if ([ProbeSid]::DeriveAppContainerSidFromAppContainerName($profile, [ref]$pointer) -ne 0) { throw 'SID derivation failed.' }
-    $packageSid = [Security.Principal.SecurityIdentifier]::new($pointer)
-    [void][ProbeSid]::FreeSid($pointer)
-    $parts = $packageSid.Value -split '-'
-    $restrictingSid = [Security.Principal.SecurityIdentifier]::new(('S-1-5-21-' + ($parts[4..7] -join '-')))
-    $originalAcl = Get-Acl -LiteralPath $root
-    $beforeAcl = $originalAcl.Sddl
-    $rules = @('read', $programs, 'read', $gitRoot, 'write', $workspace, 'write', $checkoutContainer)
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot allocate ancestor probe profile.' }
     try {
-        if ($mask) {
-            foreach ($sid in @($packageSid, $restrictingSid)) {
-                Invoke-Checked $child @('ancestor-grant', $root, $sid.Value, $mask.ToString())
-            }
-        }
-        foreach ($path in @('C:\', 'C:\Users', (Split-Path $root -Parent), $root, $checkoutContainer)) {
-            & $helper --run $profile isolated $workspace @rules -- $child attributes $path
-            Write-Host "ANCESTOR mask=$mask path=$path status=$LASTEXITCODE"
-        }
-        $destination = Join-Path $checkoutContainer "worktree-$mask"
-        & $helper --run $profile isolated $workspace @rules -- $git -C $workspace worktree add --detach $destination HEAD
+        $captured = @(& $helper --run $profile isolated $workspace @Rules -- $Program @Arguments)
         $status = $LASTEXITCODE
-        Write-Host "WORKTREE mask=$mask status=$status"
-        if ($status -ne 128) {
-            $unexpected.Add("Ancestor control mask=$mask returned $status")
-        }
+        Write-Host "ANCESTOR name=$Name status=$status"
+        if ($status -ne $Expected) { throw "Ancestor probe $Name returned $status, expected $Expected" }
+        return $captured
     } finally {
-        & $helper --cleanup $profile @rules
-        if ($mask) {
-            foreach ($sid in @($packageSid, $restrictingSid)) {
-                Invoke-Checked $child @('ancestor-grant', $root, $sid.Value, '0')
-            }
-        }
-        if ((Get-Acl -LiteralPath $root).Sddl -ne $beforeAcl) { throw 'Ancestor DACL cleanup mismatch.' }
+        & $helper --cleanup $profile @Rules
+        if ($LASTEXITCODE -ne 0) { throw 'Ancestor profile cleanup failed.' }
     }
 }
+$attributeRules = @('read', $programs, 'write', $checkoutContainer)
+foreach ($payload in @($child, $childX86)) {
+    foreach ($path in @('C:\', 'C:\Users', $root, $privateAncestor)) {
+        foreach ($operation in @('attributes', 'attributes-ex')) {
+            $baseline = @(& $payload $operation $path)
+            if ($LASTEXITCODE -ne 0) { throw 'Ordinary ancestor attribute control failed.' }
+            $contained = @(Invoke-AncestorCommand "$operation/$path" $payload @($operation, $path) $attributeRules)
+            if (($baseline -join "`n") -cne ($contained -join "`n")) {
+                throw "Ancestor $operation did not return real host metadata for $path"
+            }
+        }
+    }
+}
+Invoke-AncestorCommand 'unrelated-attributes' $child @('attributes', $unrelated) $attributeRules 5
+Invoke-AncestorCommand 'unrelated-attributes-ex' $child @('attributes-ex', $unrelated) $attributeRules 5
+Invoke-AncestorCommand 'ancestor-enumeration' $child @('enumerate', $privateAncestor) $attributeRules 5
+Invoke-AncestorCommand 'relative-ancestor' $child @('attributes', '..') $attributeRules 5
+Invoke-AncestorCommand 'dot-ancestor' $child @('attributes', "$privateAncestor/../$([IO.Path]::GetFileName($privateAncestor))") $attributeRules 5
+$deniedRules = $attributeRules + @('deny', $deniedAncestor, 'read', $deniedInner)
+Invoke-AncestorCommand 'explicit-denied-ancestor' $child @('attributes', $deniedAncestor) $deniedRules 5
+$ordinaryDestination = Join-Path $checkoutContainer 'ordinary/workspace'
+Invoke-Checked $git @('-C', $workspace, 'worktree', 'add', '--detach', $ordinaryDestination, 'HEAD')
+$destination = Join-Path $checkoutContainer 'sandbox/workspace'
+$worktreeRules = @('read', $programs, 'read', $gitRoot, 'write', $workspace, 'write', $checkoutContainer)
+Invoke-AncestorCommand 'git-worktree-add' $git @('-C', $workspace, 'worktree', 'add', '--detach', $destination, 'HEAD') $worktreeRules
+if (-not (Test-Path -LiteralPath (Join-Path $destination '.git') -PathType Leaf)) { throw 'Git did not create its worktree pointer.' }
+if ((Get-Acl -LiteralPath $root).Sddl -ne $ancestorAcl) { throw 'Shared ancestor ACL changed.' }
 $env:CL_SANDBOX_PROBE_GIT = $git
 $env:CL_SANDBOX_PROBE_WORKSPACE = $workspace
 $powerShellProbe = @'

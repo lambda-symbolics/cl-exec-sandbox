@@ -375,6 +375,7 @@ static HANDLE restricted_token(void) {
     free(sids); free(user); free(groups);
     return restricted;
 }
+extern BOOL sandbox_prepare_ancestors(unsigned count, wchar_t **paths, const wchar_t **kinds);
 extern BOOL sandbox_inject_null(HANDLE process, HANDLE job, const wchar_t *profile);
 extern BOOL sandbox_remove_null_alias(const wchar_t *profile);
 extern BOOL sandbox_start_broker(HANDLE job, PSID package, const wchar_t *profile);
@@ -506,9 +507,11 @@ int wmain(int argc, wchar_t **argv) {
         (end - start) / 2 > MAX_RULES)
         fail(L"invalid filesystem rule list", ERROR_INVALID_PARAMETER);
     wchar_t *paths[MAX_RULES];
+    const wchar_t *kinds[MAX_RULES];
     for (int i = start; i < end; i += 2) {
         if (wcscmp(argv[i], L"read") && wcscmp(argv[i], L"write") && wcscmp(argv[i], L"deny"))
             fail(L"unknown filesystem access", ERROR_INVALID_PARAMETER);
+        kinds[(i - start) / 2] = argv[i];
         paths[(i - start) / 2] = local_path(argv[i + 1]);
     }
     PSID sid = NULL;
@@ -545,6 +548,8 @@ int wmain(int argc, wchar_t **argv) {
         for (int i = start; i < end; i += 2) pin_path(paths[(i - start) / 2]);
         for (int i = start; i < end; i += 2)
             walk(paths[(i - start) / 2], sid, argv[i], 0, TRUE, 0);
+        require(sandbox_prepare_ancestors((unsigned)((end - start) / 2), paths, kinds),
+                L"pin scope ancestor metadata");
         PSID created = NULL;
         check_hr(CreateAppContainerProfile(argv[2], argv[2], L"cl-exec-sandbox invocation", NULL, 0, &created),
                  L"create unique AppContainer profile");

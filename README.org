@@ -70,9 +70,11 @@ For native program compatibility, the helper injects an architecture-matching
 Detours client before resuming the command and its documented Win32 process
 creation calls. The client retries denied canonical Null opens through a private
 broker, which opens the real device separately for each request. It also retries
-final-path queries using handles already owned by the caller. A per-invocation
-DOS-device alias permits DLL loading from Unicode installation paths. Runtime
-use requires no administrator setup.
+final-path queries using handles already owned by the caller. Denied
+=GetFileAttributesW= and =GetFileAttributesExW= probes can obtain real metadata
+for exact pinned ancestors of authorized scopes, excluding explicit deny paths.
+A per-invocation DOS-device alias permits DLL loading from Unicode installation
+paths. Runtime use requires no administrator setup.
 
 Use =appcontainer-sandbox-policy= with explicit existing =:read-roots= and
 =:workspace-roots=. Include the command's binaries and dependencies in the read
