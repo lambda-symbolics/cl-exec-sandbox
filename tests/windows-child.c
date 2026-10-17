@@ -128,6 +128,200 @@ static int probe_cwd(void) {
     return 0;
 }
 
+typedef LONG NTSTATUS;
+typedef struct _UNICODE_STRING_NATIVE { USHORT Length; USHORT MaximumLength; PWSTR Buffer; } UNICODE_STRING_NATIVE;
+typedef struct _OBJECT_ATTRIBUTES_NATIVE { ULONG Length; HANDLE RootDirectory; UNICODE_STRING_NATIVE *ObjectName; ULONG Attributes; PVOID SecurityDescriptor; PVOID SecurityQualityOfService; } OBJECT_ATTRIBUTES_NATIVE;
+typedef struct _IO_STATUS_BLOCK_NATIVE { union { NTSTATUS Status; PVOID Pointer; } DUMMYUNIONNAME; ULONG_PTR Information; } IO_STATUS_BLOCK_NATIVE;
+typedef NTSTATUS (NTAPI *nt_create_file_function)(PHANDLE, ACCESS_MASK, OBJECT_ATTRIBUTES_NATIVE *, IO_STATUS_BLOCK_NATIVE *, PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+typedef NTSTATUS (NTAPI *nt_open_file_function)(PHANDLE, ACCESS_MASK, OBJECT_ATTRIBUTES_NATIVE *, IO_STATUS_BLOCK_NATIVE *, ULONG, ULONG);
+typedef NTSTATUS (NTAPI *nt_query_information_file_function)(HANDLE, IO_STATUS_BLOCK_NATIVE *, PVOID, ULONG, ULONG);
+
+static void native_unicode_string(UNICODE_STRING_NATIVE *string, wchar_t *text) {
+    string->Length = (USHORT)(wcslen(text) * sizeof(wchar_t));
+    string->MaximumLength = string->Length;
+    string->Buffer = text;
+}
+
+static NTSTATUS native_open(const wchar_t *name, ACCESS_MASK access, ULONG share,
+                            ULONG disposition, ULONG options, HANDLE *result,
+                            int use_open) {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    nt_create_file_function create_file = (nt_create_file_function)GetProcAddress(ntdll, "NtCreateFile");
+    nt_open_file_function open_file = (nt_open_file_function)GetProcAddress(ntdll, "NtOpenFile");
+    UNICODE_STRING_NATIVE unicode;
+    OBJECT_ATTRIBUTES_NATIVE attributes;
+    IO_STATUS_BLOCK_NATIVE io;
+    native_unicode_string(&unicode, (wchar_t *)name);
+    ZeroMemory(&attributes, sizeof(attributes));
+    attributes.Length = sizeof(attributes);
+    attributes.ObjectName = &unicode;
+    ZeroMemory(&io, sizeof(io));
+    if (!create_file || !open_file) return (NTSTATUS)0xC0000002L;
+    if (use_open) return open_file(result, access, &attributes, &io, share, options);
+    return create_file(result, access, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
+                       share, disposition, options, NULL, 0);
+}
+
+static int native_async_read(HANDLE file, const wchar_t *label) {
+    OVERLAPPED overlapped;
+    char byte = 0;
+    DWORD count = 77, error;
+    ZeroMemory(&overlapped, sizeof(overlapped));
+    overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!overlapped.hEvent) return (int)GetLastError();
+    BOOL immediate = ReadFile(file, &byte, 1, &count, &overlapped);
+    if (!immediate) {
+        error = GetLastError();
+        if (error != ERROR_IO_PENDING) {
+            wprintf(L"NUL semantics async label=%ls error=%lu\n", label, error);
+            CloseHandle(overlapped.hEvent);
+            return (int)error;
+        }
+        if (!GetOverlappedResult(file, &overlapped, &count, TRUE)) {
+            error = GetLastError();
+            CloseHandle(overlapped.hEvent);
+            return (int)error;
+        }
+    }
+    wprintf(L"NUL semantics async label=%ls immediate=%d bytes=%lu\n", label,
+            immediate ? 1 : 0, count);
+    CloseHandle(overlapped.hEvent);
+    return count == 0 ? 0 : ERROR_INVALID_DATA;
+}
+
+static void native_matrix_open(const wchar_t *label, ACCESS_MASK access, ULONG share,
+                               ULONG disposition, ULONG options) {
+    HANDLE file = INVALID_HANDLE_VALUE;
+    NTSTATUS status = native_open(L"\\Device\\Null", access, share, disposition,
+                                  options, &file, 0);
+    wprintf(L"NUL semantics matrix label=%ls access=0x%08lx share=0x%08lx disposition=%lu options=0x%08lx status=0x%08lx\n",
+            label, (ULONG)access, share, disposition, options, (ULONG)status);
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+}
+
+static int native_iocp_read(HANDLE file, ULONG_PTR key, const wchar_t *label) {
+    HANDLE port = CreateIoCompletionPort(file, NULL, key, 1);
+    OVERLAPPED overlapped;
+    char byte = 0;
+    DWORD bytes = 77, error;
+    ULONG_PTR completion_key = 0;
+    LPOVERLAPPED completed = NULL;
+    BOOL immediate;
+    if (!port) return (int)GetLastError();
+    ZeroMemory(&overlapped, sizeof(overlapped));
+    immediate = ReadFile(file, &byte, 1, &bytes, &overlapped);
+    if (!immediate) {
+        error = GetLastError();
+        if (error != ERROR_IO_PENDING) {
+            CloseHandle(port);
+            return (int)error;
+        }
+        if (!GetQueuedCompletionStatus(port, &bytes, &completion_key, &completed, 2000)) {
+            error = GetLastError();
+            CloseHandle(port);
+            return (int)error;
+        }
+        if (completed != &overlapped || completion_key != key) {
+            CloseHandle(port);
+            return ERROR_INVALID_DATA;
+        }
+    }
+    wprintf(L"NUL semantics iocp label=%ls key=%llu immediate=%d bytes=%lu\n",
+            label, (unsigned long long)key, immediate ? 1 : 0, bytes);
+    CloseHandle(port);
+    return bytes == 0 ? 0 : ERROR_INVALID_DATA;
+}
+
+static int probe_nul_semantics(void) {
+    const ACCESS_MASK access = GENERIC_READ | GENERIC_WRITE;
+    const ULONG share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    const ULONG options = FILE_NON_DIRECTORY_FILE;
+    HANDLE synchronous = INVALID_HANDLE_VALUE, asynchronous = INVALID_HANDLE_VALUE;
+    HANDLE opened = INVALID_HANDLE_VALUE;
+    NTSTATUS status;
+    int result = 0;
+    native_matrix_open(L"read-open", GENERIC_READ, share, FILE_OPEN, options);
+    native_matrix_open(L"write-open-if", GENERIC_WRITE, share, FILE_OPEN_IF, options);
+    native_matrix_open(L"read-write-sync", access, share, FILE_OPEN, options | FILE_SYNCHRONOUS_IO_NONALERT);
+    native_matrix_open(L"exclusive-share", access, 0, FILE_OPEN, options);
+    status = native_open(L"\\Device\\Null", access, share, FILE_OPEN,
+                         options | FILE_SYNCHRONOUS_IO_NONALERT, &synchronous, 0);
+    wprintf(L"NUL semantics NtCreateFile synchronous status=0x%08lx\n", (ULONG)status);
+    if (status < 0) result = 1;
+    status = native_open(L"\\Device\\Null", access, share, FILE_OPEN,
+                         options, &asynchronous, 0);
+    wprintf(L"NUL semantics NtCreateFile asynchronous status=0x%08lx\n", (ULONG)status);
+    if (status < 0) result = 1;
+    status = native_open(L"\\??\\NUL", access, share, FILE_OPEN, options,
+                         &opened, 1);
+    wprintf(L"NUL semantics NtOpenFile status=0x%08lx\n", (ULONG)status);
+    if (status < 0) result = 1;
+    if (synchronous != INVALID_HANDLE_VALUE && asynchronous != INVALID_HANDLE_VALUE &&
+        synchronous == asynchronous) {
+        wprintf(L"NUL semantics fresh-handle mismatch\n");
+        result = 1;
+    } else wprintf(L"NUL semantics fresh-handles=independent\n");
+    if (asynchronous != INVALID_HANDLE_VALUE && native_async_read(asynchronous, L"first")) result = 1;
+    if (opened != INVALID_HANDLE_VALUE && native_async_read(opened, L"second")) result = 1;
+    if (asynchronous != INVALID_HANDLE_VALUE && native_iocp_read(asynchronous, 0xA5, L"first")) result = 1;
+    if (opened != INVALID_HANDLE_VALUE && native_iocp_read(opened, 0x5A, L"second")) result = 1;
+    if (synchronous != INVALID_HANDLE_VALUE) {
+        IO_STATUS_BLOCK_NATIVE io;
+        nt_query_information_file_function query =
+            (nt_query_information_file_function)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationFile");
+        ULONG mode = 0;
+        ZeroMemory(&io, sizeof(io));
+        if (!query || query(synchronous, &io, &mode, sizeof(mode), 16) < 0 ||
+            !(mode & FILE_SYNCHRONOUS_IO_NONALERT)) {
+            wprintf(L"NUL semantics synchronous-mode mismatch mode=0x%08lx\n", mode);
+            result = 1;
+        } else wprintf(L"NUL semantics synchronous-mode=0x%08lx\n", mode);
+    }
+    if (opened != INVALID_HANDLE_VALUE) CloseHandle(opened);
+    if (asynchronous != INVALID_HANDLE_VALUE) CloseHandle(asynchronous);
+    if (synchronous != INVALID_HANDLE_VALUE) CloseHandle(synchronous);
+    return result;
+}
+
+static int probe_final_path_semantics(void) {
+    wchar_t temp_path[MAX_PATH], path[MAX_PATH], output[2];
+    HANDLE file;
+    DWORD length, error;
+    int result = 0;
+    if (!GetTempPathW(MAX_PATH, temp_path)) return (int)GetLastError();
+    if (swprintf(path, MAX_PATH, L"%lsautolith-final-path-%lu.tmp", temp_path,
+                 GetCurrentProcessId()) < 0) return ERROR_INSUFFICIENT_BUFFER;
+    file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, NULL);
+    if (file == INVALID_HANDLE_VALUE) return (int)GetLastError();
+    length = GetFinalPathNameByHandleW(file, output, 1, VOLUME_NAME_DOS | FILE_NAME_OPENED);
+    error = length ? 0 : GetLastError();
+    wprintf(L"FINAL path sizing flags=%lu result=%lu error=%lu\n",
+            VOLUME_NAME_DOS | FILE_NAME_OPENED, length, error);
+    if (!length || length < 2) result = 1;
+    const DWORD flags[] = {VOLUME_NAME_DOS, VOLUME_NAME_NT,
+                           VOLUME_NAME_DOS | FILE_NAME_OPENED,
+                           VOLUME_NAME_NT | FILE_NAME_OPENED};
+    for (unsigned i = 0; i < sizeof(flags) / sizeof(flags[0]); ++i) {
+        wchar_t *buffer = (wchar_t *)HeapAlloc(GetProcessHeap(), 0,
+                                               (length + 2) * sizeof(wchar_t));
+        DWORD actual;
+        if (!buffer) { result = ERROR_NOT_ENOUGH_MEMORY; break; }
+        actual = GetFinalPathNameByHandleW(file, buffer, length + 2, flags[i]);
+        wprintf(L"FINAL path flags=%lu result=%lu text=%ls\n", flags[i], actual, buffer);
+        if (!actual) result = 1;
+        HeapFree(GetProcessHeap(), 0, buffer);
+    }
+    SetLastError(0);
+    length = GetFinalPathNameByHandleW(INVALID_HANDLE_VALUE, output, 1, VOLUME_NAME_DOS);
+    error = GetLastError();
+    wprintf(L"FINAL invalid-handle result=%lu error=%lu\n", length, error);
+    if (length || error != ERROR_INVALID_HANDLE) result = 1;
+    CloseHandle(file);
+    DeleteFileW(path);
+    return result;
+}
 int wmain(int argc, wchar_t **argv) {
     if (argc < 2) return 99;
     if (!wcscmp(argv[1], L"identity")) {
@@ -146,6 +340,8 @@ int wmain(int argc, wchar_t **argv) {
     if (!wcscmp(argv[1], L"nul-descendant")) return probe_nul_descendant();
     if (!wcscmp(argv[1], L"nul-security")) return probe_nul_security();
     if (!wcscmp(argv[1], L"cwd")) return probe_cwd();
+    if (!wcscmp(argv[1], L"nul-semantics")) return probe_nul_semantics();
+    if (!wcscmp(argv[1], L"final-path-semantics")) return probe_final_path_semantics();
 
     if (argc < 3) return 99;
 
