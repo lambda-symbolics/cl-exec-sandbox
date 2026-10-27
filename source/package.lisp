@@ -66,7 +66,3 @@ Windows.")
    #:sample-capture
    #:decode-capture-bytes
    #:run-sandboxed))
-
-(defpackage #:cl-exec-sandbox/tests
-  (:use #:cl #:cl-exec-sandbox)
-  (:export #:run-tests))
