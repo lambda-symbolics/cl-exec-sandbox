@@ -1,6 +1,7 @@
 (in-package #:cl-exec-sandbox/tests)
 
 (defun windows-test-write (path text)
+  "Write TEXT to PATH, creating its directories and replacing any old file."
   (ensure-directories-exist path)
   (with-open-file (stream path :direction :output :if-exists :supersede)
     (write-string text stream)))
