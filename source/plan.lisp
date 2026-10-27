@@ -45,5 +45,6 @@
   (:documentation "Release backend-owned resources after PLAN's process tree has stopped."))
 
 (defmethod sandbox-plan-cleanup ((plan sandbox-plan))
+  "Do nothing, because a plain plan owns no backend resources."
   (declare (ignore plan))
   nil)
