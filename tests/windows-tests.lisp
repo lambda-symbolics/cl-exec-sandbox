@@ -159,8 +159,8 @@
                  (sleep 2)
                  (check (not (probe-file late)) "process-tree termination prevented late write")))
              (dolist (snapshot acl-snapshots)
-               (check (string= (cdr snapshot) (acl (car snapshot)))
-                      (format nil "restore ACL after execution and timeout: ~A" (car snapshot))))
+               (check (string= (rest snapshot) (acl (first snapshot)))
+                      (format nil "restore ACL after execution and timeout: ~A" (first snapshot))))
              (dolist (unsupported
                        (list (read-only-sandbox-policy)
                              (workspace-write-sandbox-policy :workspace-roots (list workspace))
