@@ -1,6 +1,6 @@
 (in-package #:cl-exec-sandbox)
 
-;;;; Native AppContainer launch plans
+;;;; -- Native AppContainer Launch Plans --
 
 (defun windows--compatibility-libraries (helper)
   "Return the adjacent architecture-specific clients needed by sandboxed processes."
@@ -21,8 +21,14 @@
       candidate)))
 
 (defclass windows-sandbox-plan (sandbox-plan)
-  ((profile :initarg :profile :reader windows-plan-profile)
-   (rules :initarg :rules :reader windows-plan-rules))
+  ((profile
+    :initarg       :profile
+    :reader        windows-plan-profile
+    :documentation "The AppContainer profile name created for this invocation.")
+   (rules
+    :initarg       :rules
+    :reader        windows-plan-rules
+    :documentation "The access and path arguments of the granted rules, which cleanup revokes."))
   (:documentation "An AppContainer launch and the SID-specific ACL cleanup it owns."))
 
 (defun windows--helper-command (helper arguments)
