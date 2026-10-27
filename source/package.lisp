@@ -1,4 +1,7 @@
 (defpackage #:cl-exec-sandbox
+  (:documentation "Run external programs under a filesystem and network policy.
+Bubblewrap enforces the policy on Linux, Seatbelt on macOS, and AppContainer on
+Windows.")
   (:use #:cl)
   (:export
    #:sandbox-error
