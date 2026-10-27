@@ -120,17 +120,20 @@ scope. Polling status observes native exit without depending on that wakeup."
 
 (defun execute--terminate-process (plan process)
   "Urgently terminate and reap PLAN's native process scope."
+  ; mallet:suppress no-ignore-errors -- the process may already be gone, and cleanup must go on
   (when (ignore-errors (uiop:process-alive-p process))
     (ecase (sandbox-plan-termination-scope plan)
       (:process
        (ignore-errors (uiop:terminate-process process :urgent t)))
       (:process-group
        (ignore-errors (posix--terminate-process-group process)))))
+  ; mallet:suppress no-ignore-errors -- the process may already be reaped, and cleanup must go on
   (ignore-errors (execute--wait-process process))
   nil)
 
 (defun execute--join-reader (thread capture)
   "Join THREAD with bounded grace; interrupt a pipe held open by descendants."
+  ; mallet:suppress no-ignore-errors -- the reader may already be gone, and the capture status records an interruption
   (unless (ignore-errors (sb-thread:join-thread thread :timeout 0.5 :default nil))
     (when (sb-thread:thread-alive-p thread)
       (ignore-errors (sb-thread:terminate-thread thread))
@@ -242,12 +245,15 @@ scope. Polling status observes native exit without depending on that wakeup."
         (when process
           (unless (eq status ':exited)
             (execute--terminate-process plan process))
+          ; mallet:suppress no-ignore-errors -- a failed wait leaves the exit code NIL in the result
           (setf exit-code (ignore-errors (execute--wait-process process))))
         (dolist (reader readers)
           (execute--join-reader (first reader) (rest reader)))
         (when process
+          ; mallet:suppress no-ignore-errors -- a failed close of a drained pipe must not stop cleanup
           (ignore-errors (close (uiop:process-info-output process)))
           (unless merge-output-p
+            ; mallet:suppress no-ignore-errors -- a failed close of a drained pipe must not stop cleanup
             (ignore-errors (close (uiop:process-info-error-output process)))))
         (capture--finish output-capture status)
         (capture--finish error-capture status)

@@ -60,6 +60,7 @@
                          (incf stored wanted))
                      (error ()
                        (setf (sandbox-capture-status capture) ':write-error)
+                       ; mallet:suppress no-ignore-errors -- the capture status already records the write error
                        (ignore-errors (close destination :abort t))
                        (setf destination nil))))
                  (when (< wanted count)
@@ -93,6 +94,7 @@
           (handler-case (close destination)
             (error ()
               (setf (sandbox-capture-status capture) ':write-error))))
+        ; mallet:suppress no-ignore-errors -- a failed close of the drained pipe must not hide the capture status
         (ignore-errors (close stream)))))
   t)
 

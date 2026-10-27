@@ -164,6 +164,7 @@
              plan))
       (unless complete-p
         (dolist (path created)
+          ; mallet:suppress no-ignore-errors -- a directory left behind must not hide the plan failure
           (ignore-errors (uiop:delete-empty-directory path)))))))
 
 (defun appcontainer-sandbox-policy
