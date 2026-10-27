@@ -29,23 +29,23 @@ or helper binary."
   (let ((helper (posix--find-process-group-helper)))
     (if helper
         (make-instance 'sandbox-plan
-                       :program helper
-                       :arguments (append (list "--" (uiop:native-namestring program))
-                                          arguments)
-                       :environment environment
+                       :program                helper
+                       :arguments              (append (list "--" (uiop:native-namestring program))
+                                                       arguments)
+                       :environment            environment
                        :environment-provided-p (or (not (null environment))
                                                    clear-environment-p)
-                       :working-directory cwd
-                       :cleanup-paths nil
-                       :termination-scope :process-group)
+                       :working-directory      cwd
+                       :cleanup-paths          nil
+                       :termination-scope      :process-group)
         (make-instance 'sandbox-plan
-                       :program program
-                       :arguments arguments
-                       :environment environment
+                       :program                program
+                       :arguments              arguments
+                       :environment            environment
                        :environment-provided-p (or (not (null environment))
                                                    clear-environment-p)
-                       :working-directory cwd
-                       :cleanup-paths nil))))
+                       :working-directory      cwd
+                       :cleanup-paths          nil))))
 
 (defun posix--terminate-process-group (process)
   "Urgently terminate the process group led by PROCESS.

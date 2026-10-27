@@ -89,9 +89,9 @@
 (defun windows--validate-path (path)
   "Return a local drive path, normalizing SBCL's extended-length spelling."
   (let* ((native (uiop:native-namestring path))
-         (local (if (uiop:string-prefix-p "\\\\?\\" native)
-                    (subseq native 4)
-                    native)))
+         (local  (if (uiop:string-prefix-p "\\\\?\\" native)
+                     (subseq native 4)
+                     native)))
     (unless (and (> (length local) 3)
                  (alpha-char-p (char local 0))
                  (char= (char local 1) #\:)
@@ -107,14 +107,14 @@
     (program arguments policy cwd environment clear-environment-p)
   "Build a fail-closed AppContainer plan with invocation-scoped filesystem grants."
   (windows--validate-policy policy)
-  (let ((helper (windows--find-helper))
-        (created nil)
+  (let ((helper     (windows--find-helper))
+        (created    nil)
         (complete-p nil))
     (unless helper
       (windows--unsupported :platform-backend
                             "Build the Windows AppContainer helper or set CL_EXEC_SANDBOX_WINDOWS_HELPER."))
     (unwind-protect
-         (let ((rules (rules--resolve-rules policy cwd))
+         (let ((rules        (rules--resolve-rules policy cwd))
                (native-rules nil))
            ;; Only the two injected clients are implicit read scopes, not the
            ;; helper directory or its unrelated contents.
@@ -126,7 +126,7 @@
                    (append native-rules
                            (list "read" (windows--validate-path library)))))
            (dolist (rule rules)
-             (let* ((path (resolved-filesystem-rule-path rule))
+             (let* ((path   (resolved-filesystem-rule-path rule))
                     (native (windows--validate-path path)))
                (unless (probe-file path)
                  (unless (eq (resolved-filesystem-rule-origin rule) :protected-metadata)
@@ -144,15 +144,15 @@
            (let* ((profile (windows--new-profile helper))
                   (plan
                     (make-instance 'windows-sandbox-plan
-                     :program helper
-                     :arguments (append (list "--run" profile "isolated"
-                                              (uiop:native-namestring cwd))
-                                        native-rules (list "--" (uiop:native-namestring program))
-                                        arguments)
-                     :environment environment
+                     :program                helper
+                     :arguments              (append (list "--run" profile "isolated"
+                                                           (uiop:native-namestring cwd))
+                                                     native-rules (list "--" (uiop:native-namestring program))
+                                                     arguments)
+                     :environment            environment
                      :environment-provided-p (or (not (null environment)) clear-environment-p)
-                     :working-directory cwd
-                     :cleanup-paths (reverse created)
+                     :working-directory      cwd
+                     :cleanup-paths          (reverse created)
                      :profile profile :rules native-rules)))
              (setf complete-p t)
              plan))
@@ -170,7 +170,7 @@ Whole-host read access and arbitrary network modes require a different backend."
   (unless workspace-roots
     (error 'sandbox-policy-error :message "An AppContainer policy needs a workspace root."))
   (make-sandbox-policy
-   :workspace-roots workspace-roots
+   :workspace-roots          workspace-roots
    :protected-metadata-names protected-metadata-names
    :network :isolated :mount-proc-p nil :isolate-processes-p nil
    :filesystem-rules

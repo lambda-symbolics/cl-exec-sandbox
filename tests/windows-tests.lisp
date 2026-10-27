@@ -25,18 +25,20 @@
          (metadata (merge-pathnames ".git/config" workspace))
          (payload (merge-pathnames "windows-child.exe" programs))
          (policy (appcontainer-sandbox-policy :workspace-roots (list workspace)
-                                              :read-roots (list programs read-root)))
+                                              :read-roots      (list programs read-root)))
          (long-policy (appcontainer-sandbox-policy :workspace-roots (list long-root)
-                                                    :read-roots (list workspace programs)))
+                                                    :read-roots     (list workspace programs)))
          (acl-snapshots nil)
          (checks 0))
     (labels ((check (truth description)
                (unless truth (error "Windows sandbox test failed: ~A" description))
                (incf checks))
+
              (run (arguments &optional (selected-policy policy) timeout)
                (run-sandboxed (uiop:native-namestring payload) arguments
                               :policy selected-policy :working-directory workspace
                               :timeout (or timeout 20) :output-limit 8192 :error-output-limit 8192))
+
              (status (arguments expected &optional (selected-policy policy))
                (let ((result (run arguments selected-policy)))
                  (unless (= expected (sandbox-result-exit-code result))
@@ -52,11 +54,13 @@
                         (format nil "~S: expected ~D, got ~D; ~A"
                                 arguments expected (sandbox-result-exit-code result)
                                 (sandbox-result-error-output result)))))
+
              (acl (path)
                (let ((result (run (list "acl" (uiop:native-namestring path))
                                   (unrestricted-sandbox-policy))))
                  (check (zerop (sandbox-result-exit-code result)) "read ACL snapshot")
                  (sandbox-result-output result)))
+
              (native (path) (uiop:native-namestring path)))
       (unwind-protect
            (progn
@@ -84,7 +88,7 @@
                                 (sandbox-result-exit-code result)
                                 (sandbox-result-output result)
                                 (sandbox-result-error-output result))))
-               (status (list "read" (native (cl-exec-sandbox::windows--find-helper))) 5)
+             (status (list "read" (native (cl-exec-sandbox::windows--find-helper))) 5)
              (dolist (command (list (list "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" "-NoProfile" "-NonInteractive" "-Command" "Write-Output shell-ok")))
                (let ((result (run-sandboxed (first command) (rest command)
                                           :policy policy :working-directory workspace :timeout 20)))
@@ -116,7 +120,7 @@
                       (append (sandbox-policy-filesystem-rules policy)
                               (list (make-filesystem-rule :kind :path :path denied :access :deny))))))
                (status (list "read" (native secret)) 5 denied-policy))
-             (let ((allowed (merge-pathnames "allowed.txt" denied))
+             (let ((allowed  (merge-pathnames "allowed.txt" denied))
                    (readable (merge-pathnames "readable.txt" denied)))
                (windows-test-write allowed "nested")
                (windows-test-write readable "nested")
@@ -148,10 +152,10 @@
                       (sb-bsd-sockets:socket-listen server 8)
                       (let ((port (nth-value 1 (sb-bsd-sockets:socket-name server))))
                         (status (list "connect" (write-to-string port)) 0 (unrestricted-sandbox-policy))
-                         (status (list "connect" (write-to-string port)) 5)))
+                        (status (list "connect" (write-to-string port)) 5)))
                  (sb-bsd-sockets:socket-close server)))
              (dolist (mode '("spawn-exit" "spawn"))
-               (let* ((late (merge-pathnames (format nil "~A.txt" mode) workspace))
+               (let* ((late   (merge-pathnames (format nil "~A.txt" mode) workspace))
                       (result (run (list mode (native late)) policy (if (string= mode "spawn") 0.75 20))))
                  (if (string= mode "spawn")
                      (check (sandbox-result-timed-out-p result) "timeout reported")

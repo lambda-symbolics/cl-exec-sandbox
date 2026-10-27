@@ -4,25 +4,25 @@
 
 (defclass filesystem-rule ()
   ((kind
-    :initarg :kind
-    :reader filesystem-rule-kind
-    :type (member :path :glob :special)
+    :initarg       :kind
+    :reader        filesystem-rule-kind
+    :type          (member :path :glob :special)
     :documentation "Whether PATH is literal, a deny glob, or a special path token.")
    (path
-    :initarg :path
-    :reader filesystem-rule-path
-    :type t
+    :initarg       :path
+    :reader        filesystem-rule-path
+    :type          t
     :documentation "The literal pathname, glob string, or special path keyword.")
    (subpath
-    :initarg :subpath
-    :initform nil
-    :reader filesystem-rule-subpath
-    :type (or null string)
+    :initarg       :subpath
+    :initform      nil
+    :reader        filesystem-rule-subpath
+    :type          (or null string)
     :documentation "An optional relative suffix for a workspace-roots special rule.")
    (access
-    :initarg :access
-    :reader filesystem-rule-access
-    :type (member :read :write :deny)
+    :initarg       :access
+    :reader        filesystem-rule-access
+    :type          (member :read :write :deny)
     :documentation "The effective access granted or denied at this rule."))
   (:documentation "One filesystem rule in a sandbox policy."))
 
@@ -54,54 +54,54 @@
        (error 'sandbox-policy-error
               :message "Only :WORKSPACE-ROOTS accepts a subpath."))))
   (make-instance 'filesystem-rule
-                 :kind kind
-                 :path path
+                 :kind    kind
+                 :path    path
                  :subpath subpath
-                 :access access))
+                 :access  access))
 
 
 ;;;; -- Policy --
 
 (defclass sandbox-policy ()
   ((filesystem-kind
-    :initarg :filesystem-kind
-    :reader sandbox-policy-filesystem-kind
-    :type (member :restricted :unrestricted :external)
+    :initarg       :filesystem-kind
+    :reader        sandbox-policy-filesystem-kind
+    :type          (member :restricted :unrestricted :external)
     :documentation "Whether this library enforces a restricted filesystem view.")
    (filesystem-rules
-    :initarg :filesystem-rules
-    :reader sandbox-policy-filesystem-rules
-    :type list
+    :initarg       :filesystem-rules
+    :reader        sandbox-policy-filesystem-rules
+    :type          list
     :documentation "Ordered filesystem rules resolved by specificity at launch.")
    (network
-    :initarg :network
-    :reader sandbox-policy-network
-    :type (member :enabled :isolated :proxy-only)
+    :initarg       :network
+    :reader        sandbox-policy-network
+    :type          (member :enabled :isolated :proxy-only)
     :documentation "The network namespace and syscall policy.")
    (workspace-roots
-    :initarg :workspace-roots
-    :reader sandbox-policy-workspace-roots
-    :type list
+    :initarg       :workspace-roots
+    :reader        sandbox-policy-workspace-roots
+    :type          list
     :documentation "Absolute project roots expanded by :WORKSPACE-ROOTS rules.")
    (glob-scan-maximum-depth
-    :initarg :glob-scan-maximum-depth
-    :reader sandbox-policy-glob-scan-maximum-depth
-    :type (or null (integer 0))
+    :initarg       :glob-scan-maximum-depth
+    :reader        sandbox-policy-glob-scan-maximum-depth
+    :type          (or null (integer 0))
     :documentation "The optional maximum depth for deny-glob expansion.")
    (mount-proc-p
-    :initarg :mount-proc-p
-    :reader sandbox-policy-mount-proc-p
-    :type boolean
+    :initarg       :mount-proc-p
+    :reader        sandbox-policy-mount-proc-p
+    :type          boolean
     :documentation "Whether a fresh procfs should be mounted in a PID namespace.")
    (isolate-processes-p
-    :initarg :isolate-processes-p
-    :reader sandbox-policy-isolate-processes-p
-    :type boolean
+    :initarg       :isolate-processes-p
+    :reader        sandbox-policy-isolate-processes-p
+    :type          boolean
     :documentation "Whether user, PID, IPC, and UTS namespaces are required.")
    (protected-metadata-names
-    :initarg :protected-metadata-names
-    :reader sandbox-policy-protected-metadata-names
-    :type list
+    :initarg       :protected-metadata-names
+    :reader        sandbox-policy-protected-metadata-names
+    :type          list
     :documentation "Metadata basenames kept read-only beneath writable workspace roots."))
   (:documentation "A complete process sandbox policy independent of its host backend."))
 
@@ -148,25 +148,25 @@
     (error 'sandbox-policy-error
            :message "Protected metadata names must be non-empty path basenames."))
   (make-instance 'sandbox-policy
-                 :filesystem-kind filesystem-kind
-                 :filesystem-rules (copy-list filesystem-rules)
-                 :network network
+                 :filesystem-kind         filesystem-kind
+                 :filesystem-rules        (copy-list filesystem-rules)
+                 :network                 network
                  :workspace-roots
                  (mapcar (lambda (path)
                            (policy--absolute-directory path "A workspace root"))
                          workspace-roots)
                  :glob-scan-maximum-depth glob-scan-maximum-depth
-                 :mount-proc-p (not (null mount-proc-p))
-                 :isolate-processes-p (not (null isolate-processes-p))
+                 :mount-proc-p            (not (null mount-proc-p))
+                 :isolate-processes-p     (not (null isolate-processes-p))
                  :protected-metadata-names
                  (mapcar #'copy-seq protected-metadata-names)))
 
 (defun policy--special-rule (path access &optional subpath)
   "Return one special PATH rule granting ACCESS and optional SUBPATH."
-  (make-filesystem-rule :kind :special
-                        :path path
+  (make-filesystem-rule :kind    :special
+                        :path    path
                         :subpath subpath
-                        :access access))
+                        :access  access))
 
 (defun policy--path-rule (path access)
   "Return one literal PATH rule granting ACCESS."
@@ -175,8 +175,8 @@
 (defun read-only-sandbox-policy (&key (network :isolated) workspace-roots)
   "Return a whole-filesystem read-only policy."
   (make-sandbox-policy
-   :network network
-   :workspace-roots workspace-roots
+   :network          network
+   :workspace-roots  workspace-roots
    :filesystem-rules (list (policy--special-rule :root :read))))
 
 (defun workspace-write-sandbox-policy
@@ -197,19 +197,19 @@
     (when write-tmpdir-p
       (setf rules (append rules (list (policy--special-rule :tmpdir :write)))))
     (make-sandbox-policy
-     :network network
-     :workspace-roots workspace-roots
+     :network                  network
+     :workspace-roots          workspace-roots
      :protected-metadata-names protected-metadata-names
-     :filesystem-rules rules)))
+     :filesystem-rules         rules)))
 
 (defun unrestricted-sandbox-policy (&key (network :enabled))
   "Return a policy granting full filesystem and selected network access."
-  (make-sandbox-policy :filesystem-kind :unrestricted
-                       :network network
+  (make-sandbox-policy :filesystem-kind     :unrestricted
+                       :network             network
                        :isolate-processes-p nil))
 
 (defun external-sandbox-policy (&key (network :enabled))
   "Return a policy declaring that containment is supplied outside this library."
-  (make-sandbox-policy :filesystem-kind :external
-                       :network network
+  (make-sandbox-policy :filesystem-kind     :external
+                       :network             network
                        :isolate-processes-p nil))

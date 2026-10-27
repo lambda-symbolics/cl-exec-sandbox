@@ -110,7 +110,7 @@ enforced by this backend. SANDBOX-CAPABILITIES reports that absence, and a
 policy requesting them is translated without them rather than rejected."
   (when (eq (sandbox-policy-network policy) :proxy-only)
     (error 'sandbox-unavailable
-           :message "Seatbelt cannot enforce a proxy-only network policy."
+           :message    "Seatbelt cannot enforce a proxy-only network policy."
            :capability :network-proxy-only))
   (let ((rules (rules--resolve-rules policy cwd)))
     (with-output-to-string (stream)
@@ -126,8 +126,10 @@ policy requesting them is translated without them rather than rejected."
           (format stream "~A~%" operation)))
       (format stream "(~A network*)~%"
               (ecase (sandbox-policy-network policy)
-                (:enabled "allow")
-                (:isolated "deny"))))))
+                (:enabled
+                 "allow")
+                (:isolated
+                 "deny"))))))
 
 
 ;;;; -- Seatbelt Plan --
@@ -141,16 +143,16 @@ created and the plan carries no cleanup obligations."
   (let ((sandbox-exec (macos--find-sandbox-exec)))
     (unless sandbox-exec
       (error 'sandbox-unavailable
-             :message "A restricted macOS sandbox requires the Seatbelt launcher."
+             :message    "A restricted macOS sandbox requires the Seatbelt launcher."
              :capability :seatbelt))
     (make-instance 'sandbox-plan
-                   :program sandbox-exec
-                   :arguments (append (list "-p"
-                                            (macos--seatbelt-profile policy cwd)
-                                            (uiop:native-namestring program))
-                                      arguments)
-                   :environment environment
+                   :program           sandbox-exec
+                   :arguments         (append (list "-p"
+                                                    (macos--seatbelt-profile policy cwd)
+                                                    (uiop:native-namestring program))
+                                              arguments)
+                   :environment       environment
                    :environment-provided-p
                    (not (null (or environment clear-environment-p)))
                    :working-directory cwd
-                   :cleanup-paths nil)))
+                   :cleanup-paths     nil)))

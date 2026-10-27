@@ -6,46 +6,46 @@
   ((status :initarg :status :initform ':exited :reader sandbox-result-status
            :documentation "Exited, timeout, cancelled, launch-failed, or interrupted.")
    (output-capture :initarg :output-capture :initform nil
-                   :reader sandbox-result-output-capture
+                   :reader        sandbox-result-output-capture
                    :documentation "Raw output capture metadata.")
    (error-capture :initarg :error-capture :initform nil
-                  :reader sandbox-result-error-capture
+                  :reader        sandbox-result-error-capture
                   :documentation "Raw error capture metadata, NIL for merged output.")
    (cancelled-p :initarg :cancelled-p :initform nil
-                :reader sandbox-result-cancelled-p
+                :reader        sandbox-result-cancelled-p
                 :documentation "Whether cancellation was requested.")
    (exit-code :initarg :exit-code :reader sandbox-result-exit-code
-              :type (or null integer)
+              :type          (or null integer)
               :documentation "Process exit status, or NIL when launch failed.")
    (output
-    :initarg :output
-    :reader sandbox-result-output
-    :type string
+    :initarg       :output
+    :reader        sandbox-result-output
+    :type          string
     :documentation "Captured standard output.")
    (output-truncated-p
-    :initarg :output-truncated-p
-    :reader sandbox-result-output-truncated-p
-    :type boolean
+    :initarg       :output-truncated-p
+    :reader        sandbox-result-output-truncated-p
+    :type          boolean
     :documentation "Whether standard output exceeded its capture limit.")
    (error-output
-    :initarg :error-output
-    :reader sandbox-result-error-output
-    :type string
+    :initarg       :error-output
+    :reader        sandbox-result-error-output
+    :type          string
     :documentation "Captured standard error.")
    (error-output-truncated-p
-    :initarg :error-output-truncated-p
-    :reader sandbox-result-error-output-truncated-p
-    :type boolean
+    :initarg       :error-output-truncated-p
+    :reader        sandbox-result-error-output-truncated-p
+    :type          boolean
     :documentation "Whether standard error exceeded its capture limit.")
    (timed-out-p
-    :initarg :timed-out-p
-    :reader sandbox-result-timed-out-p
-    :type boolean
+    :initarg       :timed-out-p
+    :reader        sandbox-result-timed-out-p
+    :type          boolean
     :documentation "Whether supervision terminated the process after its deadline.")
    (real-seconds
-    :initarg :real-seconds
-    :reader sandbox-result-real-seconds
-    :type real
+    :initarg       :real-seconds
+    :reader        sandbox-result-real-seconds
+    :type          real
     :documentation "Elapsed monotonic wall-clock seconds."))
   (:documentation "The captured outcome of one sandboxed command."))
 
@@ -85,11 +85,11 @@
     (plan input output-path error-path merge-output-p ownership-function)
   "Launch PLAN and publish its process through OWNERSHIP-FUNCTION."
   (let ((arguments
-          (list :input input
-                :output output-path
-                :error-output (if merge-output-p :output error-path)
-                :directory (sandbox-plan-working-directory plan)
-                :element-type '(unsigned-byte 8)
+          (list :input               input
+                :output              output-path
+                :error-output        (if merge-output-p :output error-path)
+                :directory           (sandbox-plan-working-directory plan)
+                :element-type        '(unsigned-byte 8)
                 :ignore-error-status t)))
     (when (sandbox-plan-environment-provided-p plan)
       (setf arguments
@@ -156,8 +156,8 @@ scope. Polling status observes native exit without depending on that wakeup."
   (make-instance 'sandbox-result
                  :exit-code exit-code :status status
                  :output-capture output-capture :error-capture error-capture
-                 :timed-out-p (eq status ':timeout)
-                 :cancelled-p (eq status ':cancelled)
+                 :timed-out-p  (eq status ':timeout)
+                 :cancelled-p  (eq status ':cancelled)
                  :output "" :output-truncated-p nil
                  :error-output "" :error-output-truncated-p nil
                  :real-seconds (/ (- (get-internal-real-time) started)
@@ -168,15 +168,15 @@ scope. Polling status observes native exit without depending on that wakeup."
      &key capture-directory retain-output-p (capture-byte-limit 67108864)
        cancel-function capture-created-function capture-function)
   "Run PLAN with bounded raw pipes and unwind-safe capture ownership."
-  (let* ((started (get-internal-real-time))
+  (let* ((started        (get-internal-real-time))
          (output-capture nil)
-         (error-capture nil)
-         (process nil)
-         (readers nil)
-         (status ':interrupted)
-         (exit-code nil)
-         (launch-error nil)
-         (result nil))
+         (error-capture  nil)
+         (process        nil)
+         (readers        nil)
+         (status         ':interrupted)
+         (exit-code      nil)
+         (launch-error   nil)
+         (result         nil))
     (unwind-protect
          (progn
            (handler-case
@@ -193,7 +193,7 @@ scope. Polling status observes native exit without depending on that wakeup."
                    (funcall capture-created-function
                             (execute--capture-result started
                                                      :output-capture output-capture
-                                                     :error-capture error-capture)))
+                                                     :error-capture  error-capture)))
                  (execute--launch-plan
                   plan input ':stream ':stream merge-output-p
                   (lambda (launched-process) (setf process launched-process))))
@@ -248,7 +248,7 @@ scope. Polling status observes native exit without depending on that wakeup."
         (capture--finish error-capture status)
         (setf result (execute--capture-result started
                                              :output-capture output-capture
-                                             :error-capture error-capture
+                                             :error-capture  error-capture
                                              :status status :exit-code exit-code))
         (unwind-protect
              (progn
@@ -267,7 +267,7 @@ scope. Polling status observes native exit without depending on that wakeup."
              :message (format nil "Could not launch sandbox: ~A" launch-error)
              :command (cons (uiop:native-namestring (sandbox-plan-program plan))
                             (sandbox-plan-arguments plan))
-             :result result))
+             :result  result))
     result))
 
 (defun run-sandboxed
@@ -301,16 +301,16 @@ an error in that callback prevents launch and invokes final CAPTURE-FUNCTION."
       (error 'sandbox-policy-error :message "CAPTURE-DIRECTORY must already exist.")))
   (let ((plan (sandbox-build-plan program arguments
                                   :policy policy :working-directory working-directory
-                                  :environment environment
+                                  :environment         environment
                                   :clear-environment-p clear-environment-p)))
     (unwind-protect
          (execute--run-plan plan input timeout merge-output-p output-limit error-output-limit
-                            :capture-directory capture-directory
-                            :retain-output-p retain-output-p
-                            :capture-byte-limit capture-byte-limit
-                            :cancel-function cancel-function
+                            :capture-directory        capture-directory
+                            :retain-output-p          retain-output-p
+                            :capture-byte-limit       capture-byte-limit
+                            :cancel-function          cancel-function
                             :capture-created-function capture-created-function
-                            :capture-function capture-function)
+                            :capture-function         capture-function)
       (sb-sys:without-interrupts
         (unwind-protect
              (sandbox-plan-cleanup plan)

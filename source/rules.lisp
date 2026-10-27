@@ -60,7 +60,7 @@ locations a POSIX host is likely to share."
 (defun rules--find-rg ()
   "Return the configured or PATH-resolved ripgrep pathname, excluding CWD."
   (let ((override (uiop:getenv "CL_EXEC_SANDBOX_RG"))
-        (cwd (uiop:getcwd)))
+        (cwd      (uiop:getcwd)))
     (or (when (and override (path--executable-file-p (pathname override)))
           (truename override))
         (loop for candidate in '(#P"/usr/bin/rg" #P"/bin/rg")
@@ -77,7 +77,7 @@ locations a POSIX host is likely to share."
   (let ((rg (rules--find-rg)))
     (unless rg
       (error 'sandbox-unavailable
-             :message "Deny-glob expansion requires ripgrep."
+             :message    "Deny-glob expansion requires ripgrep."
              :capability :filesystem-deny-globs))
     (let ((arguments (list (uiop:native-namestring rg)
                            "--files" "--hidden" "--no-ignore" "--null"
@@ -90,8 +90,8 @@ locations a POSIX host is likely to share."
             (append arguments (list "--" (uiop:native-namestring root))))
       (multiple-value-bind (output error-output status)
           (uiop:run-program arguments
-                            :output :string
-                            :error-output :string
+                            :output              :string
+                            :error-output        :string
                             :ignore-error-status t)
         (declare (ignore error-output))
         (unless (member status '(0 1))
@@ -158,8 +158,8 @@ a nested rule is established after the rule it narrows."
     (stable-sort
      rules
      (lambda (left right)
-       (let ((left-depth (length (path--components
-                                  (resolved-filesystem-rule-path left))))
+       (let ((left-depth  (length (path--components
+                                   (resolved-filesystem-rule-path left))))
              (right-depth (length (path--components
                                    (resolved-filesystem-rule-path right)))))
          (if (= left-depth right-depth)

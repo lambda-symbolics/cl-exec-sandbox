@@ -11,24 +11,24 @@
 
 (defun test-retained-byte-capture ()
   "Test exact large output, bounded sampling, invalid UTF-8 and separate streams."
-  (let* ((root (tests--temporary-root))
-         (fixture (merge-pathnames "bytes" root))
-         (bytes (make-array 131073 :element-type '(unsigned-byte 8)))
+  (let* ((root           (tests--temporary-root))
+         (fixture        (merge-pathnames "bytes" root))
+         (bytes          (make-array 131073 :element-type '(unsigned-byte 8)))
          (callback-count 0))
     (dotimes (index (length bytes))
       (setf (aref bytes index) (mod index 256)))
     (unwind-protect
          (progn
            (with-open-file (stream fixture :direction ':output
-                                   :element-type '(unsigned-byte 8)
+                                   :element-type      '(unsigned-byte 8)
                                    :if-does-not-exist ':create)
              (write-sequence bytes stream))
-           (let* ((result (run-sandboxed "/bin/cat" (list (namestring fixture))
-                                         :policy (unrestricted-sandbox-policy)
-                                         :capture-directory root :output-limit 11
-                                         :capture-function (lambda (result)
-                                                             (declare (ignore result))
-                                                             (incf callback-count))))
+           (let* ((result  (run-sandboxed "/bin/cat" (list (namestring fixture))
+                                          :policy           (unrestricted-sandbox-policy)
+                                          :capture-directory root :output-limit 11
+                                          :capture-function (lambda (result)
+                                                              (declare (ignore result))
+                                                              (incf callback-count))))
                   (capture (sandbox-result-output-capture result)))
              (test-assert (equalp bytes (capture-tests--bytes (sandbox-capture-path capture)))
                           "large retained bytes are exact, including NUL and malformed UTF-8")
@@ -51,8 +51,8 @@
                           "invalid UTF-8 renders replacement characters without changing raw bytes")
              #-win32
              (test-assert (= #o600 (logand #o777 (sb-posix:stat-mode
-                                                (sb-posix:stat (namestring
-                                                               (sandbox-capture-path capture))))))
+                                                  (sb-posix:stat (namestring
+                                                                  (sandbox-capture-path capture))))))
                           "capture files have private permissions"))
            (test-assert (= callback-count 1) "normal callback runs exactly once")
            (dolist (merged '(nil t))
@@ -62,22 +62,22 @@
                                           :capture-directory root :merge-output-p merged
                                           :output-limit 20 :error-output-limit 20))
                     (output (sandbox-result-output-capture result))
-                    (error (sandbox-result-error-capture result)))
+                    (error  (sandbox-result-error-capture result)))
                (test-assert (= (sandbox-result-exit-code result) 7)
                             "nonzero exit status is retained")
                (test-assert (sandbox-capture-complete-p output)
                             "failed commands can have complete captures")
                (test-assert (string= (decode-capture-bytes
-                                     (capture-tests--bytes (sandbox-capture-path output)))
+                                      (capture-tests--bytes (sandbox-capture-path output)))
                                     (if merged "outdiagnostic" "out"))
                             "merged and separate output preserve raw bytes")
                (test-assert (if merged (null error)
                                (and (sandbox-capture-complete-p error)
                                     (string= (sandbox-result-error-output result) "diagnostic")))
                             "separate metadata never claims merged interleaving")))
-           (let* ((result (run-sandboxed "/bin/sh" '("-c" "printf abcd")
-                                        :policy (unrestricted-sandbox-policy)
-                                        :retain-output-p t))
+           (let* ((result  (run-sandboxed "/bin/sh" '("-c" "printf abcd")
+                                         :policy          (unrestricted-sandbox-policy)
+                                         :retain-output-p t))
                   (capture (sandbox-result-output-capture result)))
              (unwind-protect
                   (multiple-value-bind (head tail omitted)
@@ -95,11 +95,11 @@
   (let ((root (tests--temporary-root)))
     (unwind-protect
          (dolist (limit '(0 5 10000))
-           (let* ((result (run-sandboxed "/bin/sh"
-                                        '("-c" "i=0; while [ $i -lt 1000 ]; do printf 0123456789; printf abcdefghij >&2; i=$((i+1)); done")
-                                        :policy (unrestricted-sandbox-policy)
-                                        :capture-directory root :capture-byte-limit limit
-                                        :output-limit 0 :error-output-limit 0))
+           (let* ((result   (run-sandboxed "/bin/sh"
+                                          '("-c" "i=0; while [ $i -lt 1000 ]; do printf 0123456789; printf abcdefghij >&2; i=$((i+1)); done")
+                                          :policy (unrestricted-sandbox-policy)
+                                          :capture-directory root :capture-byte-limit limit
+                                          :output-limit 0 :error-output-limit 0))
                   (captures (list (sandbox-result-output-capture result)
                                   (sandbox-result-error-capture result))))
              (test-assert (zerop (sandbox-result-exit-code result))
@@ -123,12 +123,12 @@
     (unwind-protect
          (dolist (mode '(:timeout :cancelled :interrupted))
            (let ((callback-result nil)
-                 (polls 0))
+                 (polls           0))
              (catch 'capture-interrupt
                (run-sandboxed "/bin/sh" '("-c" "printf beginning; sleep 5")
-                              :policy (unrestricted-sandbox-policy)
+                              :policy           (unrestricted-sandbox-policy)
                               :capture-directory root :merge-output-p t
-                              :timeout (when (eq mode ':timeout) 0.1)
+                              :timeout          (when (eq mode ':timeout) 0.1)
                               :cancel-function
                               (unless (eq mode ':timeout)
                                 (lambda ()
@@ -154,8 +154,8 @@
 
 (defun test-retained-capture-launch-failure ()
   "Test failed native launch preserves empty files and final callback metadata."
-  (let ((root (tests--temporary-root))
-        (original (symbol-function 'cl-exec-sandbox::execute--launch-plan))
+  (let ((root            (tests--temporary-root))
+        (original        (symbol-function 'cl-exec-sandbox::execute--launch-plan))
         (callback-result nil))
     (unwind-protect
          (progn
@@ -165,9 +165,9 @@
                    (error 'file-error :pathname #P"missing-program")))
            (handler-case
                (run-sandboxed "/bin/sh" '("-c" "exit 0")
-                              :policy (unrestricted-sandbox-policy)
+                              :policy            (unrestricted-sandbox-policy)
                               :capture-directory root
-                              :capture-function (lambda (result) (setf callback-result result)))
+                              :capture-function  (lambda (result) (setf callback-result result)))
              (sandbox-execution-error (condition)
                (test-assert (eq callback-result (sandbox-execution-error-result condition))
                             "launch failure condition exposes the final result")))
@@ -185,17 +185,17 @@
 
 (defun test-retained-capture-held-pipe ()
   "Test a descendant retaining a pipe cannot deadlock output-reader shutdown."
-  (let* ((root (tests--temporary-root))
+  (let* ((root     (tests--temporary-root))
          (previous (uiop:getenv "CL_EXEC_SANDBOX_PROCESS_GROUP_HELPER")))
     (unwind-protect
          (progn
            ;; Exercise the documented direct-process fallback, whose descendants
            ;; cannot be terminated through a process group.
            (sb-posix:setenv "CL_EXEC_SANDBOX_PROCESS_GROUP_HELPER" "/missing/helper" 1)
-           (let* ((result (run-sandboxed "/bin/sh"
-                                        '("-c" "printf beginning; sleep 2 & exit 0")
-                                        :policy (unrestricted-sandbox-policy)
-                                        :capture-directory root :merge-output-p t :output-limit 20))
+           (let* ((result  (run-sandboxed "/bin/sh"
+                                         '("-c" "printf beginning; sleep 2 & exit 0")
+                                         :policy (unrestricted-sandbox-policy)
+                                         :capture-directory root :merge-output-p t :output-limit 20))
                   (capture (sandbox-result-output-capture result)))
              (test-assert (< (sandbox-result-real-seconds result) 1.5)
                           "held pipes have bounded reader shutdown")
@@ -211,7 +211,7 @@
 
 (defun test-retained-capture-write-failure ()
   "Test disk-full writes before and after a retained prefix, without blocking the child."
-  (let ((root (tests--temporary-root))
+  (let ((root     (tests--temporary-root))
         (original (symbol-function 'cl-exec-sandbox::capture--write-buffer)))
     (unwind-protect
          (dolist (successful-buffers '(0 1))
@@ -224,15 +224,15 @@
                        ((probe-file #P"/dev/full")
                         ;; Real ENOSPC at the file-write boundary on POSIX hosts.
                         (with-open-file (full #P"/dev/full" :direction ':output
-                                              :if-exists ':append
-                                              :element-type '(unsigned-byte 8))
+                                              :if-exists               ':append
+                                              :element-type            '(unsigned-byte 8))
                           (funcall original full buffer count)))
                        (t
                         (error 'file-error :pathname root)))))
-             (let* ((result (run-sandboxed "/bin/sh"
-                                          '("-c" "i=0; while [ $i -lt 1000 ]; do printf 0123456789; i=$((i+1)); done")
-                                          :policy (unrestricted-sandbox-policy)
-                                          :capture-directory root :merge-output-p t))
+             (let* ((result  (run-sandboxed "/bin/sh"
+                                           '("-c" "i=0; while [ $i -lt 1000 ]; do printf 0123456789; i=$((i+1)); done")
+                                           :policy (unrestricted-sandbox-policy)
+                                           :capture-directory root :merge-output-p t))
                     (capture (sandbox-result-output-capture result)))
                (test-assert (zerop (sandbox-result-exit-code result))
                             "disk-full capture continues draining the child")
@@ -249,19 +249,19 @@
 
 (defun test-retained-capture-creation ()
   "Test pre-launch identity publication and callback failure without side effects."
-  (let* ((root (tests--temporary-root))
+  (let* ((root     (tests--temporary-root))
          (sentinel (merge-pathnames "launched" root)))
     (unwind-protect
          (dolist (fail-p '(nil t))
-           (let ((initial nil)
-                 (final nil)
+           (let ((initial       nil)
+                 (final         nil)
                  (created-count 0)
-                 (final-count 0))
+                 (final-count   0))
              (handler-case
                  (run-sandboxed "/bin/sh"
                                 (list "-c" (format nil "printf launched > ~A; printf hello"
                                                    (uiop:escape-shell-token (namestring sentinel))))
-                                :policy (unrestricted-sandbox-policy)
+                                :policy            (unrestricted-sandbox-policy)
                                 :capture-directory root
                                 :capture-created-function
                                 (lambda (result)
@@ -276,9 +276,9 @@
                                                       (not (sandbox-capture-complete-p capture)))
                                                  "initial files exist with incomplete zero-byte metadata"))
                                   (when fail-p (error 'file-error :pathname root)))
-                                :capture-function (lambda (result)
-                                                    (incf final-count)
-                                                    (setf final result)))
+                                :capture-function  (lambda (result)
+                                                     (incf final-count)
+                                                     (setf final result)))
                (sandbox-execution-error ()
                  (test-assert fail-p "only failed creation callback prevents launch")))
              (test-assert (and (= created-count 1) (= final-count 1))
@@ -306,7 +306,7 @@
                        (lambda (result)
                          (setf final result)
                          (test-assert (probe-file (sandbox-capture-path
-                                                  (sandbox-result-output-capture result)))
+                                                   (sandbox-result-output-capture result)))
                                       "final callback can inspect the closed transient file")
                          (when unwind-p (throw 'capture-final-unwind t)))))
       (dolist (capture (list (sandbox-result-output-capture final)
@@ -326,18 +326,18 @@
 
 (defun test-retained-capture-repeated-interrupt ()
   "Test a second asynchronous nonlocal cancellation cannot abandon cleanup."
-  (let* ((root (tests--temporary-root))
-         (started (merge-pathnames "started" root))
-         (finished (merge-pathnames "finished" root))
-         (original (symbol-function 'cl-exec-sandbox::execute--join-reader))
-         (worker nil)
-         (cleanup-entered-p nil)
-         (supervising-p nil)
-         (release-p nil)
-         (second-delivered-p nil)
+  (let* ((root                     (tests--temporary-root))
+         (started                  (merge-pathnames "started" root))
+         (finished                 (merge-pathnames "finished" root))
+         (original                 (symbol-function 'cl-exec-sandbox::execute--join-reader))
+         (worker                   nil)
+         (cleanup-entered-p        nil)
+         (supervising-p            nil)
+         (release-p                nil)
+         (second-delivered-p       nil)
          (second-before-callback-p nil)
-         (callback-count 0)
-         (final nil))
+         (callback-count           0)
+         (final                    nil))
     (unwind-protect
          (progn
            (setf (symbol-function 'cl-exec-sandbox::execute--join-reader)
@@ -355,9 +355,9 @@
                                           "printf beginning; printf started > ~A; (sleep 0.3; printf leaked > ~A) & wait"
                                           (uiop:escape-shell-token (namestring started))
                                           (uiop:escape-shell-token (namestring finished))))
-                       :policy (unrestricted-sandbox-policy)
+                       :policy           (unrestricted-sandbox-policy)
                        :capture-directory root :merge-output-p t
-                       :cancel-function (lambda () (setf supervising-p t) nil)
+                       :cancel-function  (lambda () (setf supervising-p t) nil)
                        :capture-function (lambda (result)
                                            (incf callback-count)
                                            (setf final result))))
@@ -407,9 +407,9 @@
   (let ((root (tests--temporary-root)))
     (unwind-protect
          (progn
-           (let* ((result (run-sandboxed "/bin/sh" '("-c" "printf out; printf err >&2")
-                                        :policy (unrestricted-sandbox-policy)
-                                        :capture-directory root))
+           (let* ((result  (run-sandboxed "/bin/sh" '("-c" "printf out; printf err >&2")
+                                         :policy            (unrestricted-sandbox-policy)
+                                         :capture-directory root))
                   (capture (sandbox-result-output-capture result)))
              (test-assert (and (string= (sandbox-result-output result) "")
                                (string= (sandbox-result-error-output result) "")
@@ -434,19 +434,19 @@
   (let ((root (tests--temporary-root)))
     (unwind-protect
          (dotimes (iteration repetitions)
-           (let ((created (sb-thread:make-semaphore))
-                 (cancelled-p nil)
-                 (merged-p (evenp iteration))
+           (let ((created        (sb-thread:make-semaphore))
+                 (cancelled-p    nil)
+                 (merged-p       (evenp iteration))
                  (callback-count 0)
-                 (final nil)
-                 (worker nil))
+                 (final          nil)
+                 (worker         nil))
              (unwind-protect
                   (progn
                     (setf worker
                           (sb-thread:make-thread
                            (lambda ()
                              (run-sandboxed "/bin/sh" '("-c" "printf started; sleep 30")
-                                            :policy (unrestricted-sandbox-policy)
+                                            :policy          (unrestricted-sandbox-policy)
                                             :capture-directory root :merge-output-p merged-p
                                             :output-limit 0 :error-output-limit 0
                                             :capture-created-function

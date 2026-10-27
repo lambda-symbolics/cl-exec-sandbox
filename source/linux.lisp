@@ -25,12 +25,13 @@
     (when (path--executable-file-p candidate)
       (truename candidate))))
 
+
 ;;;; -- Bubblewrap Plan --
 
 (defun linux--append-target-parent-arguments (arguments path)
   "Append --dir operations ensuring PATH's parent components exist in a minimal root."
   (let ((components (butlast (path--components path)))
-        (current ""))
+        (current    ""))
     (dolist (component components arguments)
       (setf current (concatenate 'string current "/" component))
       (setf arguments (append arguments (list "--dir" current))))))
@@ -65,9 +66,9 @@
 (defun linux--append-descendant-parent-arguments (arguments descendant root)
   "Create missing parents of DESCENDANT beneath a freshly masked ROOT."
   (let ((directories nil)
-        (current (if (uiop:directory-pathname-p descendant)
-                     descendant
-                     (uiop:pathname-parent-directory-pathname descendant))))
+        (current     (if (uiop:directory-pathname-p descendant)
+                         descendant
+                         (uiop:pathname-parent-directory-pathname descendant))))
     (loop while (and current
                      (path--under-p current root)
                      (not (equal current root)))
@@ -93,7 +94,7 @@
 (defun linux--append-rule-arguments
     (arguments rule minimal-root-p deny-file-mask rules)
   "Append RULE's effective mount operation to ARGUMENTS."
-  (let* ((path (resolved-filesystem-rule-path rule))
+  (let* ((path   (resolved-filesystem-rule-path rule))
          (target (uiop:native-namestring path))
          (source (and (probe-file path) target)))
     (when minimal-root-p
@@ -138,21 +139,21 @@
        (uiop:temporary-directory))
     unless (probe-file candidate)
       do (with-open-file (stream candidate
-                                  :direction :output
+                                  :direction         :output
                                   :if-does-not-exist :create
-                                  :if-exists :error)
+                                  :if-exists         :error)
            (file-position stream 0))
          (multiple-value-bind (output error-output status)
              (uiop:run-program (list "chmod" "000"
                                      (uiop:native-namestring candidate))
-                               :output :string
-                               :error-output :string
+                               :output              :string
+                               :error-output        :string
                                :ignore-error-status t)
            (declare (ignore output error-output))
            (unless (zerop status)
              (delete-file candidate)
              (error 'sandbox-unavailable
-                    :message "Could not create a deny-path mask file."
+                    :message    "Could not create a deny-path mask file."
                     :capability :filesystem-deny)))
          (return candidate)))
 
@@ -202,20 +203,20 @@
 (defun linux--bubblewrap-plan
     (program arguments policy cwd environment clear-environment-p)
   "Return a bubblewrap launch plan for PROGRAM and ARGUMENTS under POLICY."
-  (let ((bwrap (linux--find-bwrap))
+  (let ((bwrap  (linux--find-bwrap))
         (helper (unless (eq (sandbox-policy-network policy) :enabled)
                   (linux--find-helper))))
     (unless bwrap
       (error 'sandbox-unavailable
-             :message "A restricted Linux sandbox requires bubblewrap on trusted PATH."
+             :message    "A restricted Linux sandbox requires bubblewrap on trusted PATH."
              :capability :bubblewrap))
     (when (and (not (eq (sandbox-policy-network policy) :enabled))
                (not helper))
       (error 'sandbox-unavailable
-             :message "Restricted networking requires the cl-exec-sandbox Linux helper."
+             :message    "Restricted networking requires the cl-exec-sandbox Linux helper."
              :capability :seccomp-helper))
-    (let* ((rules (rules--resolve-rules policy cwd))
-           (root-access (linux--root-access rules))
+    (let* ((rules          (rules--resolve-rules policy cwd))
+           (root-access    (linux--root-access rules))
            (minimal-root-p (null root-access))
            (deny-file-mask
              (when (find-if
@@ -273,19 +274,19 @@
                        (when deny-file-mask (list deny-file-mask)))))
         (if (eq network :proxy-only)
             (make-instance 'sandbox-plan
-                           :program helper
-                           :arguments (append (list "proxy-outer" "--"
-                                                   (uiop:native-namestring bwrap))
-                                              command)
-                           :environment environment
+                           :program                helper
+                           :arguments              (append (list "proxy-outer" "--"
+                                                                (uiop:native-namestring bwrap))
+                                                           command)
+                           :environment            environment
                            :environment-provided-p (or (not (null environment))
                                                        clear-environment-p)
-                           :working-directory cwd
-                           :cleanup-paths cleanup-paths)
+                           :working-directory      cwd
+                           :cleanup-paths          cleanup-paths)
             (make-instance 'sandbox-plan
-                           :program bwrap
-                           :arguments command
-                           :environment nil
+                           :program                bwrap
+                           :arguments              command
+                           :environment            nil
                            :environment-provided-p nil
-                           :working-directory cwd
-                           :cleanup-paths cleanup-paths))))))
+                           :working-directory      cwd
+                           :cleanup-paths          cleanup-paths))))))

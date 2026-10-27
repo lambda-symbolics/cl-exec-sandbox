@@ -24,21 +24,21 @@
   "Write TEXT to PATH and return PATH."
   (ensure-directories-exist path)
   (with-open-file (stream path
-                          :direction :output
+                          :direction         :output
                           :if-does-not-exist :create
-                          :if-exists :supersede)
+                          :if-exists         :supersede)
     (write-string text stream))
   path)
 
 (defun test-executable-file-detection ()
   "Test executable regular files, symlinks and rejected filesystem objects."
-  (let* ((root (tests--temporary-root))
+  (let* ((root       (tests--temporary-root))
          (executable (merge-pathnames "executable" root))
-         (plain (merge-pathnames "plain" root))
-         (link (merge-pathnames "executable-link" root))
-         (dangling (merge-pathnames "dangling-link" root))
-         (missing (merge-pathnames "missing" root))
-         (fifo (merge-pathnames "fifo" root)))
+         (plain      (merge-pathnames "plain" root))
+         (link       (merge-pathnames "executable-link" root))
+         (dangling   (merge-pathnames "dangling-link" root))
+         (missing    (merge-pathnames "missing" root))
+         (fifo       (merge-pathnames "fifo" root)))
     (unwind-protect
          (progn
            (tests--write executable "fixture")
@@ -133,7 +133,7 @@
 (defun tests--before-p (profile earlier later)
   "Return true when EARLIER appears in PROFILE strictly before LATER."
   (let ((earlier-position (search earlier profile))
-        (later-position (search later profile)))
+        (later-position   (search later profile)))
     (and earlier-position
          later-position
          (< earlier-position later-position))))
@@ -174,7 +174,7 @@ host. They do not verify that macOS enforces the profile."
                        (tests--seatbelt-profile
                         (unrestricted-sandbox-policy :network :isolated)))
                "an unrestricted policy allows writes everywhere")
-  (let* ((root (tests--temporary-root))
+  (let* ((root     (tests--temporary-root))
          (metadata (string-right-trim
                     "/"
                     (uiop:native-namestring (merge-pathnames ".git/" root)))))
@@ -182,7 +182,7 @@ host. They do not verify that macOS enforces the profile."
          (let ((profile
                  (tests--seatbelt-profile
                   (workspace-write-sandbox-policy
-                   :workspace-roots (list root)
+                   :workspace-roots          (list root)
                    :protected-metadata-names '(".git")))))
            (test-assert
             (search (format nil "(allow file-read* file-write* (subpath ~S))"
@@ -212,11 +212,11 @@ host. They do not verify that macOS enforces the profile."
                   (make-sandbox-policy
                    :workspace-roots (list root)
                    :filesystem-rules
-                   (list (make-filesystem-rule :kind :special
-                                               :path :root
+                   (list (make-filesystem-rule :kind   :special
+                                               :path   :root
                                                :access :read)
-                         (make-filesystem-rule :kind :path
-                                               :path file
+                         (make-filesystem-rule :kind   :path
+                                               :path   file
                                                :access :deny))))))
            (test-assert
             (search (format nil "(deny file-read* file-write* (literal ~S))"
@@ -236,8 +236,8 @@ host. They do not verify that macOS enforces the profile."
 
 (defun test-read-only-enforcement ()
   "Test a read-only policy permits reads and rejects host writes."
-  (let* ((root (tests--temporary-root))
-         (file (tests--write (merge-pathnames "value.txt" root) "before"))
+  (let* ((root   (tests--temporary-root))
+         (file   (tests--write (merge-pathnames "value.txt" root) "before"))
          (policy (read-only-sandbox-policy)))
     (unwind-protect
          (let ((result
@@ -249,7 +249,7 @@ host. They do not verify that macOS enforces the profile."
                                  (uiop:native-namestring file))
                                 (uiop:escape-shell-token
                                  (uiop:native-namestring file))))
-                  :policy policy
+                  :policy            policy
                   :working-directory root)))
            (test-assert (not (zerop (sandbox-result-exit-code result)))
                         "read-only execution rejects a write")
@@ -262,15 +262,15 @@ host. They do not verify that macOS enforces the profile."
 
 (defun test-workspace-write-enforcement ()
   "Test workspace writes, outside rejection, and protected metadata carve-outs."
-  (let* ((root (tests--temporary-root))
-         (outside (tests--temporary-root))
-         (git-directory (merge-pathnames ".git/" root))
-         (git-file (tests--write (merge-pathnames "config" git-directory) "safe"))
+  (let* ((root           (tests--temporary-root))
+         (outside        (tests--temporary-root))
+         (git-directory  (merge-pathnames ".git/" root))
+         (git-file       (tests--write (merge-pathnames "config" git-directory) "safe"))
          (workspace-file (merge-pathnames "created.txt" root))
-         (outside-file (merge-pathnames "blocked.txt" outside))
+         (outside-file   (merge-pathnames "blocked.txt" outside))
          (policy
-           (workspace-write-sandbox-policy :workspace-roots (list root)
-                                           :write-tmpdir-p nil
+           (workspace-write-sandbox-policy :workspace-roots   (list root)
+                                           :write-tmpdir-p    nil
                                            :write-slash-tmp-p nil)))
     (unwind-protect
          (let ((result
@@ -286,7 +286,7 @@ host. They do not verify that macOS enforces the profile."
                             (uiop:native-namestring outside-file))
                            (uiop:escape-shell-token
                             (uiop:native-namestring git-file))))
-                  :policy policy
+                  :policy            policy
                   :working-directory root)))
            (test-assert (probe-file workspace-file)
                         "workspace-write publishes a file below the project root")
@@ -302,16 +302,16 @@ host. They do not verify that macOS enforces the profile."
 
 (defun test-missing-protected-metadata ()
   "Test a missing protected metadata path cannot be created or left behind."
-  (let* ((root (tests--temporary-root))
+  (let* ((root     (tests--temporary-root))
          (metadata (merge-pathnames ".agents/" root))
          (policy
-           (workspace-write-sandbox-policy :workspace-roots (list root)
-                                           :write-tmpdir-p nil
+           (workspace-write-sandbox-policy :workspace-roots   (list root)
+                                           :write-tmpdir-p    nil
                                            :write-slash-tmp-p nil)))
     (unwind-protect
          (let ((result
                  (run-sandboxed "/bin/sh" '("-c" "mkdir .agents")
-                                :policy policy
+                                :policy            policy
                                 :working-directory root)))
            (test-assert (not (zerop (sandbox-result-exit-code result)))
                         "missing protected metadata rejects creation")
@@ -322,11 +322,11 @@ host. They do not verify that macOS enforces the profile."
 
 (defun test-deny-and-nested-override ()
   "Test deny masks and a more-specific writable child below a denied parent."
-  (let* ((root (tests--temporary-root))
+  (let* ((root    (tests--temporary-root))
          (blocked (merge-pathnames "blocked/" root))
          (allowed (merge-pathnames "allowed/" blocked))
-         (secret (tests--write (merge-pathnames "secret.txt" blocked) "secret"))
-         (output (merge-pathnames "new.txt" allowed)))
+         (secret  (tests--write (merge-pathnames "secret.txt" blocked) "secret"))
+         (output  (merge-pathnames "new.txt" allowed)))
     (ensure-directories-exist output)
     (let ((policy
             (make-sandbox-policy
@@ -347,7 +347,7 @@ host. They do not verify that macOS enforces the profile."
                                    (uiop:native-namestring secret))
                                   (uiop:escape-shell-token
                                    (uiop:native-namestring output))))
-                    :policy policy
+                    :policy            policy
                     :working-directory root)))
              (test-assert (not (search "secret" (sandbox-result-output result)))
                           "an exact deny masks readable content")
@@ -358,7 +358,7 @@ host. They do not verify that macOS enforces the profile."
 
 (defun test-deny-glob ()
   "Test a deny glob masks matching files without masking other project files."
-  (let* ((root (tests--temporary-root))
+  (let* ((root   (tests--temporary-root))
          (secret (tests--write (merge-pathnames "private.key" root) "secret"))
          (public (tests--write (merge-pathnames "public.txt" root) "public"))
          (policy
@@ -379,7 +379,7 @@ host. They do not verify that macOS enforces the profile."
                                  (uiop:native-namestring secret))
                                 (uiop:escape-shell-token
                                  (uiop:native-namestring public))))
-                  :policy policy
+                  :policy            policy
                   :working-directory root)))
            (test-assert (string= (sandbox-result-output result) "public")
                         "deny glob hides only matching content"))
@@ -388,7 +388,7 @@ host. They do not verify that macOS enforces the profile."
 
 (defun test-unrestricted-filesystem-with-isolated-network ()
   "Test network isolation does not accidentally narrow an unrestricted filesystem."
-  (let* ((root (tests--temporary-root))
+  (let* ((root   (tests--temporary-root))
          (output (merge-pathnames "created.txt" root))
          (result
            (run-sandboxed
@@ -413,9 +413,9 @@ host. They do not verify that macOS enforces the profile."
          (result
            (run-sandboxed
             "/bin/sh" '("-c" "printf '%s|%s' \"$PWD\" \"$VALUE\"")
-            :policy (external-sandbox-policy)
+            :policy            (external-sandbox-policy)
             :working-directory root
-            :environment '("VALUE=present"))))
+            :environment       '("VALUE=present"))))
     (unwind-protect
          (test-assert
           (string= (sandbox-result-output result)
@@ -464,7 +464,7 @@ host. They do not verify that macOS enforces the profile."
   "Test deadline supervision terminates a sandbox process."
   (let ((result
           (run-sandboxed "/bin/sh" '("-c" "sleep 5")
-                         :policy (read-only-sandbox-policy)
+                         :policy  (read-only-sandbox-policy)
                          :timeout 0.05)))
     (test-assert (sandbox-result-timed-out-p result)
                  "a command exceeding its deadline is marked timed out")
@@ -474,7 +474,7 @@ host. They do not verify that macOS enforces the profile."
 
 (defun test-direct-timeout-descendant-cleanup ()
   "Test direct timeout kills a background descendant process."
-  (let* ((root (tests--temporary-root))
+  (let* ((root     (tests--temporary-root))
          (finished (merge-pathnames "finished" root))
          (result
            (run-sandboxed
@@ -485,7 +485,7 @@ host. They do not verify that macOS enforces the profile."
                      "(sleep 0.3; printf finished > ~A) & wait"
                      (uiop:escape-shell-token
                       (uiop:native-namestring finished))))
-            :policy (unrestricted-sandbox-policy)
+            :policy  (unrestricted-sandbox-policy)
             :timeout 0.05)))
     (unwind-protect
          (progn
@@ -494,16 +494,16 @@ host. They do not verify that macOS enforces the profile."
                         "a direct command exceeding its deadline is marked timed out")
            (test-assert (not (probe-file finished))
                         "a background descendant cannot survive direct timeout"))
-      (uiop:delete-directory-tree root :validate t
+      (uiop:delete-directory-tree root :validate          t
                                        :if-does-not-exist :ignore)))
   nil)
 
 (defun test-interrupted-execution-cleanup ()
   "Test a nonlocal exit terminates and reaps the launched process."
-  (let* ((root (tests--temporary-root))
-         (started (merge-pathnames "started" root))
-         (finished (merge-pathnames "finished" root))
-         (thread nil)
+  (let* ((root          (tests--temporary-root))
+         (started       (merge-pathnames "started" root))
+         (finished      (merge-pathnames "finished" root))
+         (thread        nil)
          (interrupted-p nil))
     (unwind-protect
          (progn
@@ -550,20 +550,20 @@ host. They do not verify that macOS enforces the profile."
            (lambda ()
              (error "Stop interrupted execution test cleanup."))))
         (ignore-errors (sb-thread:join-thread thread :default nil)))
-      (uiop:delete-directory-tree root :validate t
+      (uiop:delete-directory-tree root :validate          t
                                        :if-does-not-exist :ignore)))
   nil)
 
 (defun test-interrupted-launch-ownership ()
   "Test cancellation cannot outrun ownership of a newly launched process."
-  (let* ((root (tests--temporary-root))
-         (finished (merge-pathnames "finished" root))
+  (let* ((root           (tests--temporary-root))
+         (finished       (merge-pathnames "finished" root))
          (launch-entered (sb-thread:make-semaphore))
          (launch-release (sb-thread:make-semaphore))
          (launch-function
            (symbol-function 'cl-exec-sandbox::execute--launch-plan))
-         (thread nil)
-         (interrupted-p nil))
+         (thread         nil)
+         (interrupted-p  nil))
     (unwind-protect
          (progn
            (setf (symbol-function 'cl-exec-sandbox::execute--launch-plan)
@@ -614,7 +614,7 @@ host. They do not verify that macOS enforces the profile."
            (lambda ()
              (error "Stop launch ownership test cleanup."))))
         (ignore-errors (sb-thread:join-thread thread :default nil)))
-      (uiop:delete-directory-tree root :validate t
+      (uiop:delete-directory-tree root :validate          t
                                        :if-does-not-exist :ignore)))
   nil)
 
@@ -624,7 +624,7 @@ host. They do not verify that macOS enforces the profile."
           (run-sandboxed
            "/bin/sh"
            '("-c" "printf one; printf two >&2; printf three")
-           :policy (read-only-sandbox-policy)
+           :policy         (read-only-sandbox-policy)
            :merge-output-p t)))
     (test-assert (string= (sandbox-result-output result) "onetwothree")
                  "merged command output preserves stream write order")
@@ -636,29 +636,29 @@ host. They do not verify that macOS enforces the profile."
   "Test bounded output capture and explicit truncation metadata."
   (let ((exact
           (run-sandboxed "/bin/sh" '("-c" "printf 12345; printf abc >&2")
-                         :policy (read-only-sandbox-policy)
-                         :output-limit 5
+                         :policy             (read-only-sandbox-policy)
+                         :output-limit       5
                          :error-output-limit 3))
         (truncated
           (run-sandboxed "/bin/sh" '("-c" "printf 123456; printf abcd >&2")
-                         :policy (read-only-sandbox-policy)
-                         :output-limit 5
+                         :policy             (read-only-sandbox-policy)
+                         :output-limit       5
                          :error-output-limit 3))
         (merged
           (run-sandboxed "/bin/sh" '("-c" "printf one; printf two >&2")
-                         :policy (read-only-sandbox-policy)
-                         :merge-output-p t
-                         :output-limit 4
+                         :policy             (read-only-sandbox-policy)
+                         :merge-output-p     t
+                         :output-limit       4
                          :error-output-limit 4))
         (zero
           (run-sandboxed "/bin/sh" '("-c" "printf x")
-                         :policy (read-only-sandbox-policy)
+                         :policy       (read-only-sandbox-policy)
                          :output-limit 0))
         (large
           (run-sandboxed
            "/bin/sh"
            '("-c" "head -c 16777216 /dev/zero | tr '\\000' x")
-           :policy (read-only-sandbox-policy)
+           :policy       (read-only-sandbox-policy)
            :output-limit 1024)))
     (test-assert (string= (sandbox-result-output exact) "12345")
                  "an exactly full standard output is retained")
@@ -696,7 +696,7 @@ host. They do not verify that macOS enforces the profile."
      (handler-case
          (progn
            (run-sandboxed "/bin/true" nil
-                          :policy (read-only-sandbox-policy)
+                          :policy       (read-only-sandbox-policy)
                           :output-limit -1)
            nil)
        (sandbox-policy-error ()
@@ -723,7 +723,7 @@ host. They do not verify that macOS enforces the profile."
   "Return a one-shot loopback proxy test socket, thread, and allocated port."
   (let ((listener
           (make-instance 'sb-bsd-sockets:inet-socket
-                         :type :stream
+                         :type     :stream
                          :protocol :tcp)))
     (sb-bsd-sockets:socket-bind listener #(127 0 0 1) 0)
     (sb-bsd-sockets:socket-listen listener 1)
@@ -736,11 +736,11 @@ host. They do not verify that macOS enforces the profile."
                  (stream
                    (sb-bsd-sockets:socket-make-stream
                     client
-                    :input t
-                    :output t
-                    :element-type 'character
+                    :input           t
+                    :output          t
+                    :element-type    'character
                     :external-format :utf-8
-                    :buffering :none)))
+                    :buffering       :none)))
             (unwind-protect
                  (progn
                    (write-string "pong" stream)
@@ -759,14 +759,14 @@ host. They do not verify that macOS enforces the profile."
                   "/bin/bash"
                   '("-c"
                     "port=${HTTP_PROXY##*:}; exec 3<>/dev/tcp/127.0.0.1/$port; IFS= read -r -n 4 reply <&3; printf %s \"$reply\"")
-                  :policy (read-only-sandbox-policy :network :proxy-only)
+                  :policy  (read-only-sandbox-policy :network :proxy-only)
                   :environment
                   (list (format nil "HTTP_PROXY=http://127.0.0.1:~D" port))
                   :timeout 3)))
            (test-assert (zerop (sandbox-result-exit-code result))
-                         (format nil "proxy-only command completes through the managed bridge: ~D; ~A"
-                                 (sandbox-result-exit-code result)
-                                 (sandbox-result-error-output result)))
+                        (format nil "proxy-only command completes through the managed bridge: ~D; ~A"
+                                (sandbox-result-exit-code result)
+                                (sandbox-result-error-output result)))
            (test-assert (string= (sandbox-result-output result) "pong")
                         "managed proxy bridge carries bidirectional bytes"))
       (sb-bsd-sockets:socket-close server)
