@@ -79,7 +79,7 @@
             (append arguments
                     (list "--dir" (uiop:native-namestring directory)))))))
 
-(defun linux--append-directory-mask (arguments target permissions descendants)
+(defun linux--append-directory-mask (arguments target &key permissions descendants)
   "Append a read-only empty directory mask at TARGET with PERMISSIONS."
   (setf arguments
         (append arguments (list "--perms" permissions "--tmpfs" target)))
@@ -92,7 +92,7 @@
   (append arguments (list "--remount-ro" target)))
 
 (defun linux--append-rule-arguments
-    (arguments rule minimal-root-p deny-file-mask rules)
+    (arguments rule &key minimal-root-p deny-file-mask rules)
   "Append RULE's effective mount operation to ARGUMENTS."
   (let* ((path   (resolved-filesystem-rule-path rule))
          (target (uiop:native-namestring path))
@@ -113,8 +113,8 @@
              (setf arguments
                    (linux--append-directory-mask
                     arguments target
-                    (if descendants "111" "000")
-                    descendants)))
+                    :permissions (if descendants "111" "000")
+                    :descendants descendants)))
            (setf arguments
                  (append arguments
                          (list "--ro-bind"
@@ -126,7 +126,7 @@
     (when (and (eq (resolved-filesystem-rule-origin rule) :protected-metadata)
                (not (probe-file path)))
       (setf arguments
-            (linux--append-directory-mask arguments target "555" nil)))
+            (linux--append-directory-mask arguments target :permissions "555")))
     arguments))
 
 (defun linux--temporary-mask-file ()
@@ -157,7 +157,8 @@
                     :capability :filesystem-deny)))
          (return candidate)))
 
-(defun linux--base-arguments (policy cwd root-access environment clear-environment-p)
+(defun linux--base-arguments
+    (policy cwd &key root-access environment clear-environment-p)
   "Return namespace, base filesystem, environment, and working-directory arguments."
   (let ((arguments (list "--die-with-parent" "--new-session")))
     (when (sandbox-policy-isolate-processes-p policy)
@@ -229,8 +230,10 @@
                     rules)
                (linux--temporary-mask-file)))
            (bwrap-arguments
-             (linux--base-arguments policy cwd root-access
-                                    environment clear-environment-p)))
+             (linux--base-arguments policy cwd
+                                    :root-access         root-access
+                                    :environment         environment
+                                    :clear-environment-p clear-environment-p)))
       (when (and helper minimal-root-p)
         (setf bwrap-arguments
               (linux--append-target-parent-arguments bwrap-arguments helper)
@@ -247,9 +250,9 @@
                 (linux--append-rule-arguments
                  bwrap-arguments
                  rule
-                 minimal-root-p
-                 deny-file-mask
-                 rules))))
+                 :minimal-root-p minimal-root-p
+                 :deny-file-mask deny-file-mask
+                 :rules          rules))))
       (let* ((network (sandbox-policy-network policy))
              (inner-command
                (if helper
