@@ -110,7 +110,7 @@
     local))
 
 (defun windows--appcontainer-plan
-    (program arguments policy cwd environment clear-environment-p)
+    (program arguments &key policy cwd environment clear-environment-p)
   "Build a fail-closed AppContainer plan with invocation-scoped filesystem grants."
   (windows--validate-policy policy)
   (let ((helper     (windows--find-helper))

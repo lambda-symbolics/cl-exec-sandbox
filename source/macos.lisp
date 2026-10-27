@@ -135,7 +135,7 @@ policy requesting them is translated without them rather than rejected."
 ;;;; -- Seatbelt Plan --
 
 (defun macos--seatbelt-plan
-    (program arguments policy cwd environment clear-environment-p)
+    (program arguments &key policy cwd environment clear-environment-p)
   "Return a Seatbelt launch plan for PROGRAM and ARGUMENTS under POLICY.
 
 The profile is passed on the command line, so no temporary profile file is

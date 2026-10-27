@@ -201,7 +201,7 @@
     (append arguments (list "--chdir" (uiop:native-namestring cwd)))))
 
 (defun linux--bubblewrap-plan
-    (program arguments policy cwd environment clear-environment-p)
+    (program arguments &key policy cwd environment clear-environment-p)
   "Return a bubblewrap launch plan for PROGRAM and ARGUMENTS under POLICY."
   (let ((bwrap  (linux--find-bwrap))
         (helper (unless (eq (sandbox-policy-network policy) :enabled)

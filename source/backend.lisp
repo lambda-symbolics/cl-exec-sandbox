@@ -51,10 +51,13 @@
 ;;;; -- Plan Dispatch --
 
 (defun backend--direct-plan
-    (program arguments cwd environment clear-environment-p)
+    (program arguments &key cwd environment clear-environment-p)
   "Return a direct plan with process-group supervision on supported hosts."
   (if (posix--process-group-supported-p)
-      (posix--process-group-plan program arguments cwd environment clear-environment-p)
+      (posix--process-group-plan program arguments
+                                 :cwd                 cwd
+                                 :environment         environment
+                                 :clear-environment-p clear-environment-p)
       (make-instance 'sandbox-plan
                      :program                program
                      :arguments              arguments
@@ -92,21 +95,34 @@
                             :command (cons program arguments)))))))
     (cond
       ((eq (sandbox-policy-filesystem-kind policy) :external)
-       (backend--direct-plan program-path arguments cwd environment
-                             clear-environment-p))
+       (backend--direct-plan program-path arguments
+                             :cwd                 cwd
+                             :environment         environment
+                             :clear-environment-p clear-environment-p))
       ((and (eq (sandbox-policy-filesystem-kind policy) :unrestricted)
             (eq (sandbox-policy-network policy) :enabled))
-       (backend--direct-plan program-path arguments cwd environment
-                             clear-environment-p))
+       (backend--direct-plan program-path arguments
+                             :cwd                 cwd
+                             :environment         environment
+                             :clear-environment-p clear-environment-p))
       ((member :linux *features*)
-       (linux--bubblewrap-plan program-path arguments policy cwd
-                               environment clear-environment-p))
+       (linux--bubblewrap-plan program-path arguments
+                               :policy              policy
+                               :cwd                 cwd
+                               :environment         environment
+                               :clear-environment-p clear-environment-p))
       ((member :darwin *features*)
-       (macos--seatbelt-plan program-path arguments policy cwd
-                             environment clear-environment-p))
+       (macos--seatbelt-plan program-path arguments
+                             :policy              policy
+                             :cwd                 cwd
+                             :environment         environment
+                             :clear-environment-p clear-environment-p))
       ((member :win32 *features*)
-       (windows--appcontainer-plan program-path arguments policy cwd
-                                  environment clear-environment-p))
+       (windows--appcontainer-plan program-path arguments
+                                   :policy              policy
+                                   :cwd                 cwd
+                                   :environment         environment
+                                   :clear-environment-p clear-environment-p))
       (t
        (error 'sandbox-unavailable
               :message    "No sandbox backend is available for this operating system."

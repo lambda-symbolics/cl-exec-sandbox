@@ -20,7 +20,7 @@
       (truename candidate))))
 
 (defun posix--process-group-plan
-    (program arguments cwd environment clear-environment-p)
+    (program arguments &key cwd environment clear-environment-p)
   "Return a direct launch plan with process-group supervision when installed.
 
 Fall back to direct process supervision when a packaged application did not
