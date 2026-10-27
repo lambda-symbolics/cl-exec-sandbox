@@ -3,3 +3,4 @@
 *.core
 check-lisp
 /build/
+/.qlot/
