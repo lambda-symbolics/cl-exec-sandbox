@@ -82,7 +82,7 @@
           (subseq entry (1+ separator)))))
 
 (defun execute--launch-plan
-    (plan input output-path error-path merge-output-p ownership-function)
+    (plan &key input output-path error-path merge-output-p ownership-function)
   "Launch PLAN and publish its process through OWNERSHIP-FUNCTION."
   (let ((arguments
           (list :input               input
@@ -164,9 +164,9 @@ scope. Polling status observes native exit without depending on that wakeup."
                                   (coerce internal-time-units-per-second 'double-float))))
 
 (defun execute--run-plan
-    (plan input timeout merge-output-p output-limit error-output-limit
-     &key capture-directory retain-output-p (capture-byte-limit 67108864)
-       cancel-function capture-created-function capture-function)
+    (plan &key input timeout merge-output-p output-limit error-output-limit
+               capture-directory retain-output-p (capture-byte-limit 67108864)
+               cancel-function capture-created-function capture-function)
   "Run PLAN with bounded raw pipes and unwind-safe capture ownership."
   (let* ((started        (get-internal-real-time))
          (output-capture nil)
@@ -195,8 +195,13 @@ scope. Polling status observes native exit without depending on that wakeup."
                                                      :output-capture output-capture
                                                      :error-capture  error-capture)))
                  (execute--launch-plan
-                  plan input ':stream ':stream merge-output-p
-                  (lambda (launched-process) (setf process launched-process))))
+                  plan
+                  :input              input
+                  :output-path        ':stream
+                  :error-path         ':stream
+                  :merge-output-p     merge-output-p
+                  :ownership-function (lambda (launched-process)
+                                        (setf process launched-process))))
              (error (condition)
                (setf launch-error condition status ':launch-failed)))
            (when process
@@ -304,7 +309,12 @@ an error in that callback prevents launch and invokes final CAPTURE-FUNCTION."
                                   :environment         environment
                                   :clear-environment-p clear-environment-p)))
     (unwind-protect
-         (execute--run-plan plan input timeout merge-output-p output-limit error-output-limit
+         (execute--run-plan plan
+                            :input                    input
+                            :timeout                  timeout
+                            :merge-output-p           merge-output-p
+                            :output-limit             output-limit
+                            :error-output-limit       error-output-limit
                             :capture-directory        capture-directory
                             :retain-output-p          retain-output-p
                             :capture-byte-limit       capture-byte-limit
